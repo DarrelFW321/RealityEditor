@@ -351,7 +351,7 @@ export function roomToSession(
   };
   const measured = RsgSchema.parse(scene);
   const state: EditorState = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: data.id,
     calibrationId: data.id,
     frameId,
@@ -363,6 +363,9 @@ export function roomToSession(
     assemblies: {},
     removedPhysicalIds: [],
     removalMaskIds: [],
+    removalMaskCalibration: null,
+    /** M7 groups start empty: a scan produces measured furniture, never a design group. */
+    groups: {},
   };
 
   // WHAT THE SWEEP ACTUALLY SAW OUTRANKS WHAT ROOMPLAN CLAIMS.

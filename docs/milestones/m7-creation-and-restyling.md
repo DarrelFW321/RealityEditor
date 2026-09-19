@@ -1,6 +1,7 @@
 # M7 — Structured creation and atomic restyling
 
-Status: planned; implementation and acceptance remain open. Written 2026-09-19.
+Status: implemented; deterministic checks pass, device acceptance remains open.
+Written 2026-09-19, implemented 2026-09-19.
 
 References: [shared milestone baseline](../implementation-plan-expo.md#remaining-milestone-plans--m6-through-m9), [product requirements](../prd-expo-migration.md), [M6 coordinated inputs](m6-hands-and-voice.md).
 
@@ -117,36 +118,90 @@ Extend the existing development scenarios and Modules view with M7 cases. Use de
 
 Run workspace TypeScript checks, existing gates, new M7 scenarios, and the iOS JavaScript bundle check. Demonstrate the complete voice-driven bedroom, count-change, and undo journey on a physical device after the deterministic checks pass.
 
+## What was built
+
+| Piece | Where |
+|---|---|
+| Recipe, group, construction-result, layout-proposal and transaction contracts | [`session.ts`](../../packages/contracts/src/session.ts) |
+| Authored templates: versions, material limits, envelopes, load cases | [`templates.ts`](../../packages/scene-recipes/src/templates.ts) |
+| Construction validation and revalidation | [`construction.ts`](../../packages/scene-recipes/src/construction.ts) |
+| Deterministic bounded whole-layout planner | [`layout.ts`](../../packages/spatial-engine/src/layout.ts) |
+| `applyProposal` atomic restyle transaction | [`index.ts`](../../packages/spatial-engine/src/index.ts) |
+| Recipe tool, group edits, relative sizes, paint targets | [`editor.ts`](../../mobile/src/runtime/editor.ts) |
+| Shared `restyle` entry point for touch and voice | [`coordinator.ts`](../../mobile/src/runtime/coordinator.ts) |
+| Legacy `/plan_style` expansion into the same transaction | [`legacy-style.ts`](../../mobile/src/runtime/legacy-style.ts) |
+
+### Decisions worth recording
+
+- **"Evenly spaced in usable wall space" needed defining.** A window splits a wall into
+  runs, and an odd-numbered group cannot be both evenly spaced across the whole wall and
+  clear of the opening. The planner tries the runs unrolled into one measure first
+  (perfect equal spacing), and falls back to largest-remainder allocation across runs
+  with even spacing inside each. Three 0.5m frames on the 4m window wall come out 2 + 1.
+- **`search_exhausted` is a separate status from `infeasible`.** Running out of budget is
+  not a proof, and the two are narrated differently on purpose.
+- **A three-legged bed has no authored template, and that is the answer.** `table` gained
+  an authored three-support template at version 1.1.0 with an edge-load case; `bed` did
+  not. The request is refused with the reason and a supported alternative rather than a
+  bed mesh with a leg removed.
+- **Span limits carry a per-family bracing factor.** A bare 0.9m panel limit is correct
+  for a shelf and wrong for a bed frame, which has rails; the factor makes the claim
+  about bracing explicit instead of hiding it in a fudged material number.
+- **Only violations a transaction CREATES can refuse it.** A scan can hand over a room
+  whose measured furniture already overlaps; refusing a restyle for a condition it did
+  not cause would make the feature unusable in the rooms it exists for. Pre-existing
+  problems are reported as caveats.
+- **Visibility intent removes an object from the design, never from `measured`.** The
+  measured observation keeps it in the index, so a hidden bed is still something the
+  planner routes around. `removedPhysicalIds` is untouched by hiding.
+
 ## Completion checklist
 
 ### Implementation
 
-- [ ] Structured recipes generate editable objects and stable groups.
-- [ ] Whole-layout planning checks new objects against each other and retained geometry.
-- [ ] Planning is bounded and does not block ongoing input or rendering.
-- [ ] Count, dimensions, spacing, facing, color, and surface appearance support follow-up edits.
-- [ ] No silent shrinking, count reduction, or unintended stacking occurs.
-- [ ] Restyles commit and undo atomically, including visibility intent.
-- [ ] Measured observations and physical obstacles remain intact.
-- [ ] Construction results identify authored templates and assumptions.
-- [ ] Unknown concepts are explicit and labelled.
-- [ ] Creation and restyle tools use the existing conversational session and coordinator.
+- [x] Structured recipes generate editable objects and stable groups.
+- [x] Whole-layout planning checks new objects against each other and retained geometry.
+- [x] Planning is bounded and does not block ongoing input or rendering.
+- [x] Count, dimensions, spacing, facing, color, and surface appearance support follow-up edits.
+- [x] No silent shrinking, count reduction, or unintended stacking occurs.
+- [x] Restyles commit and undo atomically, including visibility intent.
+- [x] Measured observations and physical obstacles remain intact.
+- [x] Construction results identify authored templates and assumptions.
+- [x] Unknown concepts are explicit and labelled.
+- [x] Creation and restyle tools use the existing conversational session and coordinator.
 
 ### Verification and end-state evidence
 
-- [ ] Existing checks and M7 development scenarios pass.
-- [ ] Impossible-layout, stale-proposal, and search-limit scenarios preserve committed state.
-- [ ] Stable identity and atomic undo scenarios pass.
-- [ ] The three-legged-bed scenario gives a validated result or explained refusal.
+- [x] Existing checks and M7 development scenarios pass.
+- [x] Impossible-layout, stale-proposal, and search-limit scenarios preserve committed state.
+- [x] Stable identity and atomic undo scenarios pass.
+- [x] The three-legged-bed scenario gives a validated result or explained refusal.
 - [ ] The complete bedroom/three-frames journey works on a physical device.
-- [ ] Evidence below records the build, recipes, results, and limitations.
+- [x] Evidence below records the build, recipes, results, and limitations.
 
 ## Completion evidence record
 
-- Implementation commit: **not recorded**.
-- Local commands and scenario results: **not recorded**.
-- Recipe/template versions and sample proposal outputs: **not recorded**.
-- Device model, OS, native build, and lockfile hash: **not recorded**.
+- Implementation commit: **pending commit** at time of writing; see the M7 section of
+  [implementation status](../expo-implementation-status.md).
+- Local commands and scenario results: `npm run typecheck` clean; `npm run gate` →
+  **47/47** app (13 of them M7), **9/9** server, worker self-test PASS;
+  `npx expo export --platform ios --no-bytecode` succeeds (4.5MB bundle).
+- Recipe/template versions and sample proposal outputs: `bed` 1.0.0, `table` **1.1.0**
+  (adds the authored three-support layout and its edge-load case), `cabinet` 1.0.0,
+  `shelf` 1.0.0, `frame` 1.0.0. Sample proposal — "a blue bedroom with three frames" on
+  the 4×4 fixture: bed at `[-1.00, 0, 0.00]` yaw −1.571 against the west wall; frames at
+  x = 1.70, 1.00 and −1.35 on the north wall at mount height 1.2m, group pitch 0.70m,
+  all four `valid-within-template`, 4 candidate evaluations.
+- Device model, OS, native build, and lockfile hash: **not recorded** — no device run.
 - Device demonstration and sanitized diagnostics location: **not recorded**.
-- Planning durations, construction limitations, and known failures: **not recorded**.
+- Planning durations, construction limitations, and known failures: the bounded search
+  measures **0–44 ms** on the 4×4 fixture (4 evaluations for the bedroom recipe; 13 011
+  and 44 ms for the worst case tried, four beds in a furnished room, against the 20 000
+  cap). Limitations: a group hangs on ONE wall — the planner does not spread a single
+  group across several, so "12 frames" is refused with alternatives rather than
+  distributed; floor groups are placed member-by-member by candidate search rather than
+  solved for even spacing, so `evenly_spaced` is exact only for wall groups; the
+  construction envelopes and bracing factors are authored estimates, not engineering
+  tables, and every result carries that as an assumption; legacy `CHANGE_MATERIAL` ops
+  are reported as skipped because a catalogue finish name carries no structural class.
 - Acceptance date and reviewer: **not recorded**.

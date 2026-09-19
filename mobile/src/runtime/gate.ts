@@ -19,7 +19,7 @@ async function main() {
   const only = process.argv[2]?.toUpperCase();
   const selected = only ? scenarios.filter((s) => s.milestone === only) : scenarios;
   if (!selected.length) {
-    console.error(`No scenarios for "${only ?? 'all'}". Known: M2, M3.`);
+    console.error(`No scenarios for "${only ?? 'all'}". Known: M2, M3, M4, M6, M7.`);
     process.exit(2);
   }
 
@@ -42,7 +42,7 @@ async function main() {
 
   // Same output twice is the only proof that a solver result was reasoned, not sampled.
   console.log('\nDeterminism');
-  for (const id of ['overlap', 'carry-adjust', 'calib-inferred']) {
+  for (const id of ['overlap', 'carry-adjust', 'calib-inferred', 'input-ordering', 'plan-deterministic']) {
     const scenario = selected.find((s) => s.id === id);
     if (!scenario) continue;
     const repeat = await checkDeterminism(scenario);

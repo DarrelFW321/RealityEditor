@@ -1,16 +1,29 @@
 import {
   capture,
   exampleShell,
+  sampleRoom,
   sampleRoomFurnished,
   sampleRoomWithBuiltIn,
   sweepFrames,
 } from '@reality/dev-scenarios';
-import { buildIndex, CoverageTracker, evaluateCoverage } from '@reality/spatial-engine';
-import { ShellSchema } from '@reality/contracts';
+import {
+  buildIndex,
+  CoverageTracker,
+  evaluateCoverage,
+  evaluatePlacement,
+  MAX_EVALUATIONS,
+  planLayout,
+} from '@reality/spatial-engine';
+import { buildObject } from '@reality/scene-recipes';
+import { SceneRecipeSchema, ShellSchema } from '@reality/contracts';
+import { expandLegacyPlan } from './legacy-style';
 import { roomToSession } from '../adapters/room-conversion';
 import { applyToPoint, roomFromWorld } from '../adapters/room-space';
 import type { EditorState, EditResult, InteractionContext, Vec3 } from '@reality/contracts';
 import { createEditor, type Editor } from './editor';
+import { InputCoordinator, DESTINATION_MAX_AGE_MS } from './coordinator';
+import { buildOccupancy, buildScp, isAmbiguous, largestOpenRect } from '@reality/spatial-engine';
+import { ScpSchema } from '@reality/contracts';
 
 export type StepResult = { label: string; ok: boolean; detail: string };
 export type ScenarioResult = { id: string; title: string; steps: StepResult[]; ok: boolean };
@@ -21,7 +34,7 @@ export type Scenario = {
   /** Which milestone gate this scenario is evidence for. The two suites share every
    * helper below but prove different things, and M3 drives the carry state machine
    * directly rather than going through `editor.intent`. */
-  milestone: 'M2' | 'M3' | 'M4';
+  milestone: 'M2' | 'M3' | 'M4' | 'M6' | 'M7';
   gate:
     | 'placement'
     | 'overlap'
@@ -43,7 +56,21 @@ export type Scenario = {
     | 'incomplete'
     | 'recovery'
     | 'anchor'
-    | 'shell';
+    | 'shell'
+    | 'binding'
+    | 'ordering'
+    | 'parity'
+    | 'derived'
+    | 'lifecycle'
+    | 'context'
+    // M7
+    | 'recipe'
+    | 'layout'
+    | 'transaction'
+    | 'construction'
+    | 'budget'
+    | 'palette'
+    | 'legacy';
   scene: () => EditorState;
   run: (editor: Editor) => Promise<StepResult[]>;
 };
@@ -99,10 +126,11 @@ function canonical(value: unknown, drop: Set<string>): unknown {
   return value;
 }
 
-/** Both excluded caches are derived: `version` counts edits, as Swift's canonicalData
- * does, and `occupancy` is blanked on commit because nothing recomputes it yet. */
+/** `version` is excluded because it counts edits, as Swift's canonicalData does. Occupancy
+ * and relations are NO LONGER excluded: M6 rebuilds both from geometry on every commit, so
+ * they are part of what an undo has to restore exactly rather than a cache to ignore. */
 const canon = (scene: EditorState) =>
-  JSON.stringify(canonical(scene.design, new Set(['version', 'occupancy'])));
+  JSON.stringify(canonical(scene.design, new Set(['version'])));
 
 
 // ------------------------------------------------------------------ M3 carry helpers
@@ -893,6 +921,755 @@ export const scenarios: Scenario[] = [
       // A good capture after a failure still works: nothing is left poisoned.
       const recovered = roomToSession(capture('empty-room'), 'frame-1', sweep(360));
       steps.push(check('a retry after failure converts normally', recovered.scene.design.surfaces.length > 0 && recovered.coverage?.status === 'ready', `${recovered.scene.design.surfaces.length} surfaces, ${recovered.coverage?.status}`));
+      return steps;
+    },
+  },
+
+  // ------------------------------------------------------- M6 coordinated inputs
+  //
+  // Driven through the coordinator with a scripted transport rather than a live model.
+  // The milestone plan asks for exactly that: the behaviours under test are event
+  // ordering, turn binding and idempotency, none of which a real provider makes
+  // reproducible.
+  {
+    id: 'input-binding',
+    title: 'A delayed tool acts on the object that was selected when you spoke',
+    milestone: 'M6',
+    gate: 'binding',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const input = new InputCoordinator(editor);
+      const floor = floorId(editor);
+
+      // Select the chair, point at open floor, start speaking.
+      input.select('obj_chair_01', 'touch');
+      input.point({ position: [-1.2, 0, 1.2], surfaceId: floor, kind: 'surface' }, 'hand');
+      input.openTurn('turn-1');
+      input.sealTurn('turn-1');
+
+      // While the tool call is in flight the user selects a different object.
+      input.select('obj_table_01', 'touch');
+      steps.push(check('the live selection has moved on', input.getSelection() === 'obj_table_01', input.getSelection() ?? 'none'));
+
+      const result = await input.command({ action: 'move' }, { turnId: 'turn-1', source: 'voice' });
+      steps.push(check('the delayed move is applied', result.status === 'applied' || result.status === 'adjusted', describe(result)));
+      const chair = editor.engine.getSnapshot().scene.design.objects.find((o) => o.id === 'obj_chair_01')!;
+      const table = editor.engine.getSnapshot().scene.design.objects.find((o) => o.id === 'obj_table_01')!;
+      steps.push(check('the chair moved, not the table', Math.abs(chair.pose.position[0]! + 1.2) < 0.5 && Math.abs(table.pose.position[0]! - 1.7) < 0.01, `chair at ${chair.pose.position.map((n) => n.toFixed(2)).join(',')}, table at ${table.pose.position.map((n) => n.toFixed(2)).join(',')}`));
+
+      // The op log must say which utterance caused it.
+      const op = editor.engine.getLog().at(-1);
+      steps.push(check('the edit is attributed to its turn', op?.causedBy.turnId === 'turn-1' && op.causedBy.source === 'voice', `${op?.causedBy.source}/${op?.causedBy.turnId}`));
+      return steps;
+    },
+  },
+  {
+    id: 'input-staleness',
+    title: 'A stale destination is questioned, not guessed',
+    milestone: 'M6',
+    gate: 'binding',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      // A controllable clock, so "older than two seconds" is provable without waiting
+      // two seconds or reaching into private state.
+      let clock = 1000;
+      const input = new InputCoordinator(editor, () => clock);
+      input.select('obj_chair_01');
+
+      // A turn with no destination at all.
+      input.openTurn('turn-none');
+      input.sealTurn('turn-none');
+      const none = await input.command({ action: 'move' }, { turnId: 'turn-none', source: 'voice' });
+      steps.push(check('no destination asks the user to point', none.status === 'rejected' && /point/i.test(none.message), describe(none)));
+
+      // A destination that was fresh when pointed at, and stale by the time speech ended.
+      input.point({ position: [-1.2, 0, 1.2], surfaceId: floorId(editor), kind: 'surface' });
+      input.openTurn('turn-old');
+      clock += DESTINATION_MAX_AGE_MS + 500;
+      input.sealTurn('turn-old');
+      const stale = await input.command({ action: 'move' }, { turnId: 'turn-old', source: 'voice' });
+      steps.push(check('a destination older than two seconds is refused', stale.status === 'rejected', describe(stale)));
+      steps.push(check('nothing was committed', editor.engine.getSnapshot().scene.revision === 0, `revision ${editor.engine.getSnapshot().scene.revision}`));
+
+      // The same destination, used promptly, is fine — the rule is age, not suspicion.
+      input.point({ position: [-1.2, 0, 1.2], surfaceId: floorId(editor), kind: 'surface' });
+      input.openTurn('turn-fresh');
+      clock += 200;
+      input.sealTurn('turn-fresh');
+      const fresh = await input.command({ action: 'move' }, { turnId: 'turn-fresh', source: 'voice' });
+      steps.push(check('a fresh destination is accepted', fresh.status === 'applied' || fresh.status === 'adjusted', describe(fresh)));
+
+      // A selection that did not hold across the utterance. Two candidate referents,
+      // so the only honest answer is to ask which one.
+      input.select('obj_chair_01');
+      input.point({ position: [-1.2, 0, 1.2], surfaceId: floorId(editor), kind: 'surface' });
+      input.openTurn('turn-wobble');
+      input.select('obj_table_01');
+      input.sealTurn('turn-wobble');
+      const wobbled = await input.command({ action: 'move' }, { turnId: 'turn-wobble', source: 'voice' });
+      steps.push(check('a selection that moved mid-utterance is questioned', wobbled.status === 'rejected' && /which/i.test(wobbled.message), describe(wobbled)));
+      steps.push(check('the clarification names the ambiguity', /selection changed/i.test(wobbled.message), wobbled.message));
+
+      // An unknown turn cannot act at all.
+      const ghost = await input.command({ action: 'move' }, { turnId: 'never-opened', source: 'voice' });
+      steps.push(check('an unknown turn is refused', ghost.status === 'rejected', describe(ghost)));
+      return steps;
+    },
+  },
+  {
+    id: 'input-ordering',
+    title: 'Out-of-order and duplicate deliveries are safe',
+    milestone: 'M6',
+    gate: 'ordering',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const input = new InputCoordinator(editor);
+      const floor = floorId(editor);
+
+      // Two turns, each with its own destination, responses arriving in reverse order.
+      input.select('obj_chair_01');
+      input.point({ position: [-1.2, 0, 1.2], surfaceId: floor, kind: 'surface' });
+      input.openTurn('turn-A');
+      input.sealTurn('turn-A');
+      input.attachResponse('turn-A', 'resp-A');
+
+      input.point({ position: [-1.5, 0, 0.6], surfaceId: floor, kind: 'surface' });
+      input.openTurn('turn-B');
+      input.sealTurn('turn-B');
+      input.attachResponse('turn-B', 'resp-B');
+
+      steps.push(check('each response resolves to its own turn', input.turnForResponse('resp-A')?.turnId === 'turn-A' && input.turnForResponse('resp-B')?.turnId === 'turn-B', 'resp-A -> turn-A, resp-B -> turn-B'));
+      steps.push(check('an unknown response resolves to nothing', input.turnForResponse('resp-ghost') === null, 'null'));
+
+      // B answers first, then A. Each must use its own sealed destination.
+      const b = await input.command({ action: 'move' }, { turnId: 'turn-B', callId: 'call-B', source: 'voice' });
+      steps.push(check('the later turn commits', b.status === 'applied' || b.status === 'adjusted', describe(b)));
+
+      // The same call id delivered twice must not execute twice.
+      const logged = editor.engine.getLog().length;
+      const replay = await input.command({ action: 'move' }, { turnId: 'turn-B', callId: 'call-B', source: 'voice' });
+      steps.push(check('a duplicate delivery returns the original result', replay.status === b.status && replay.message === b.message, `${replay.status} — ${replay.message}`));
+      steps.push(check('and commits nothing further', editor.engine.getLog().length === logged, `${editor.engine.getLog().length - logged} extra ops`));
+      return steps;
+    },
+  },
+  {
+    id: 'input-confirmation',
+    title: 'A delayed confirmation cannot approve a newer edit',
+    milestone: 'M6',
+    gate: 'ordering',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const input = new InputCoordinator(editor);
+      const floor = floorId(editor);
+      input.select('obj_chair_01');
+
+      // A move that needs confirming.
+      input.point({ position: [-0.2, 0, -1.2], surfaceId: floor, kind: 'surface' });
+      input.openTurn('turn-1');
+      input.sealTurn('turn-1');
+      const offered = await input.command({ action: 'move' }, { turnId: 'turn-1', source: 'voice' });
+      steps.push(check('the overlap is offered for confirmation', offered.refusal === 'awaiting_confirmation', describe(offered)));
+
+      // The user does something else instead; a second pending operation appears.
+      editor.engine.cancel();
+      input.point({ position: [-0.25, 0, -1.15], surfaceId: floor, kind: 'surface' });
+      input.openTurn('turn-2');
+      input.sealTurn('turn-2');
+      const second = await input.command({ action: 'move' }, { turnId: 'turn-2', source: 'voice' });
+      steps.push(check('a second edit is now pending', second.refusal === 'awaiting_confirmation', describe(second)));
+
+      // The first turn's "yes" arrives late. It must not approve the second edit.
+      const late = await input.confirm('turn-1');
+      steps.push(check('the stale confirmation is refused', late.status === 'rejected', describe(late)));
+      steps.push(check("the newer edit is still waiting", editor.engine.getSnapshot().pending !== null, editor.engine.getSnapshot().pending ? 'still pending' : 'wrongly resolved'));
+
+      const owned = await input.confirm('turn-2');
+      steps.push(check('its own turn can confirm it', owned.status === 'applied' || owned.status === 'adjusted', describe(owned)));
+      return steps;
+    },
+  },
+  {
+    id: 'input-parity',
+    title: 'Voice reaches every action, and joins the active carry',
+    milestone: 'M6',
+    gate: 'parity',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const input = new InputCoordinator(editor);
+      const before = canon(editor.engine.getSnapshot().scene);
+      const logged = editor.engine.getLog().length;
+
+      const named = await input.command({ action: 'select', target_id: 'desk chair' }, { source: 'voice' });
+      steps.push(check('an object can be selected by name', named.status === 'applied', describe(named)));
+      const invented = await input.command({ action: 'select', target_id: 'chaise longue' }, { source: 'voice' });
+      steps.push(check('an invented name is refused, not guessed at', invented.status === 'rejected' && invented.refusal === 'unknown_target', describe(invented)));
+
+      // A voice edit during a grab joins that transaction rather than opening a second.
+      input.select('obj_chair_01');
+      editor.engine.begin('obj_chair_01');
+      const tint = await input.command({ action: 'color', color: '#ff3b6b' }, { source: 'voice' });
+      steps.push(check('a voice recolour during a carry only previews', tint.status === 'preview', describe(tint)));
+      steps.push(check('it does not open a competing commit', editor.engine.getLog().length === logged, `${editor.engine.getLog().length - logged} ops`));
+
+      const other = await input.command({ action: 'color', target_id: 'obj_table_01', color: '#112233' }, { source: 'voice' });
+      steps.push(check('editing a different object mid-carry is refused', other.status === 'rejected', describe(other)));
+
+      editor.engine.preview({ position: [-1.2, 0, 1.2], yaw: 0 });
+      const released = await editor.engine.release(editor.nextId(), floorId(editor));
+      steps.push(check('the carry commits once', released.status === 'applied' && editor.engine.getLog().length === logged + 1, `${editor.engine.getLog().length - logged} ops`));
+
+      const undone = await input.command({ action: 'undo' }, { source: 'voice' });
+      steps.push(check('one undo restores pose and colour together', undone.status === 'applied' && canon(editor.engine.getSnapshot().scene) === before, canon(editor.engine.getSnapshot().scene) === before ? 'byte-identical' : 'design differs'));
+
+      const cancelled = await input.command({ action: 'cancel' }, { source: 'voice' });
+      steps.push(check('voice can cancel', cancelled.status === 'applied', describe(cancelled)));
+      return steps;
+    },
+  },
+  {
+    id: 'input-derived',
+    title: 'Occupancy and relations follow every committed state',
+    milestone: 'M6',
+    gate: 'derived',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const input = new InputCoordinator(editor);
+      const occupancy = () => editor.engine.getSnapshot().scene.design.occupancy;
+      const sums = () => occupancy().grid_rle.reduce((a, b) => a + b, 0);
+      const cells = () => (occupancy().size[0] ?? 0) * (occupancy().size[1] ?? 0);
+
+      steps.push(check('the grid exists before any edit', cells() > 0 && sums() === cells(), `${occupancy().size.join('x')}, runs sum ${sums()}`));
+      steps.push(check('it is the fixed 5cm resolution', occupancy().resolution_m === 0.05, String(occupancy().resolution_m)));
+
+      const before = { free: sums() - 0, relations: editor.engine.getSnapshot().scene.design.relations.length };
+      input.select('obj_bed_01');
+      const removed = await input.command({ action: 'remove' }, { source: 'voice' });
+      steps.push(check('removing the bed commits', removed.status === 'applied', describe(removed)));
+      steps.push(check('the grid still sums to its cell count', sums() === cells(), `${sums()} of ${cells()}`));
+      steps.push(check('relations for the removed object are gone', !editor.engine.getSnapshot().scene.design.relations.some((r) => r.subject === 'obj_bed_01' || r.object === 'obj_bed_01'), `${editor.engine.getSnapshot().scene.design.relations.length} relations, was ${before.relations}`));
+      steps.push(check('no relation references a missing entity', editor.engine.getSnapshot().scene.design.relations.every((r) => editor.engine.getSnapshot().scene.design.objects.some((o) => o.id === r.subject && o.state === 'present') && (editor.engine.getSnapshot().scene.design.objects.some((o) => o.id === r.object) || editor.engine.getSnapshot().scene.design.surfaces.some((s) => s.id === r.object))), 'all resolve'));
+      steps.push(check('blocks stays unemitted until a circulation model exists', !editor.engine.getSnapshot().scene.design.relations.some((r) => r.predicate === 'blocks'), 'no blocks predicate'));
+
+      // Physical obstacles are a separate layer: erasing from the design must not make
+      // the floor read as clear.
+      const scene = editor.engine.getSnapshot().scene;
+      steps.push(check('the erased object is still a physical obstacle', scene.removedPhysicalIds.includes('obj_bed_01') && scene.measured.objects.some((o) => o.id === 'obj_bed_01'), 'retained in measured'));
+      return steps;
+    },
+  },
+  {
+    id: 'input-context',
+    title: 'The spatial context packet is complete, ranked, and small',
+    milestone: 'M6',
+    gate: 'context',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const scene = editor.engine.getSnapshot().scene;
+      // Standing by the door, looking across the room at the furniture.
+      const view = { position: [1.6, 1.5, 0.9] as Vec3, forward: [-0.8, -0.25, -0.55] as Vec3, fovDeg: 68 };
+      const scp = buildScp(scene, view, { salienceStack: [], lastTap: { entity: null, ageMs: 0 }, lastFloorHit: { point: [0, 0, 0], ageMs: 300 } }, 1_758_153_600_000);
+
+      steps.push(check('it validates against the frozen SCP schema', ScpSchema.safeParse(scp).success, ScpSchema.safeParse(scp).success ? 'accepted' : JSON.stringify(ScpSchema.safeParse(scp).error?.issues[0])));
+      const bytes = JSON.stringify(scp).length;
+      steps.push(check('it fits the 2KB budget', bytes < 2048, `${bytes} bytes`));
+
+      steps.push(check('it describes what is in view', scp.visible_entities.length > 0, scp.visible_entities.map((v) => `${v.id} ${v.angular_offset_deg}deg`).join(', ')));
+      steps.push(check('entities are ordered by how centred they are', scp.visible_entities.every((v, i, all) => i === 0 || (all[i - 1]!.angular_offset_deg ?? 0) <= v.angular_offset_deg), 'nearest-to-crosshair first'));
+      steps.push(check('lists are bounded to the schema caps', scp.visible_entities.length <= 12 && scp.ranked_candidates.length <= 5 && scp.salience_stack.length <= 6 && scp.free_space_summary.wall_clearances.length <= 8, `${scp.visible_entities.length} visible, ${scp.ranked_candidates.length} candidates`));
+      steps.push(check('candidates are ranked, best first', scp.ranked_candidates.every((c, i, all) => i === 0 || (all[i - 1]!.score ?? 0) >= c.score), scp.ranked_candidates.map((c) => `${c.entity_id}:${c.score}`).join(' ')));
+      steps.push(check('every candidate names a real entity', scp.ranked_candidates.every((c) => scene.design.objects.some((o) => o.id === c.entity_id)), 'all resolve'));
+
+      // The client decides ambiguity; the model is never asked to break a tie.
+      const tie = { ...scp, ranked_candidates: [{ entity_id: 'a', score: 0.5, demonstrative: 'that' as const }, { entity_id: 'b', score: 0.45, demonstrative: 'that' as const }] };
+      const clear = { ...scp, ranked_candidates: [{ entity_id: 'a', score: 0.9, demonstrative: 'that' as const }, { entity_id: 'b', score: 0.2, demonstrative: 'that' as const }] };
+      steps.push(check('a close pair is declared ambiguous by the client', isAmbiguous(tie) && !isAmbiguous(clear), 'gap < 0.1 is a tie'));
+
+      // Free space comes from the committed occupancy grid, so it tracks edits.
+      const rect = scp.free_space_summary.largest_open_rect;
+      steps.push(check('the largest open rectangle is real floor', rect.size[0]! > 0 && rect.size[1]! > 0 && rect.size[0]! * rect.size[1]! <= scene.design.bounds.area_m2, `${rect.size.join('x')}m at ${rect.center.join(',')}`));
+      steps.push(check('it agrees with the checked-in fixture', Math.abs(rect.size[0]! - 4) < 0.06 && Math.abs(rect.size[1]! - 2.2) < 0.06, `${rect.size.join('x')} vs fixture 4x2.2`));
+      steps.push(check('wall clearances are measured for every wall', scp.free_space_summary.wall_clearances.length === scene.design.surfaces.filter((s) => s.class === 'wall').length, `${scp.free_space_summary.wall_clearances.length} walls`));
+
+      // Free space is derived, so clearing the floor must widen what the model is told.
+      const emptied = buildOccupancy({ ...scene, design: { ...scene.design, objects: [] } }, []);
+      const grown = largestOpenRect(emptied);
+      const before = rect.size[0]! * rect.size[1]!;
+      const after = grown.size[0]! * grown.size[1]!;
+      steps.push(check('an emptied room reports more free space', after > before, `${after.toFixed(2)}m2 empty vs ${before.toFixed(2)}m2 furnished`));
+      return steps;
+    },
+  },
+  {
+    id: 'input-lifecycle',
+    title: 'Obsolete work cannot commit',
+    milestone: 'M6',
+    gate: 'lifecycle',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const input = new InputCoordinator(editor);
+      const floor = floorId(editor);
+      input.select('obj_chair_01');
+      input.point({ position: [-1.2, 0, 1.2], surfaceId: floor, kind: 'surface' });
+      input.openTurn('turn-1');
+      input.sealTurn('turn-1');
+
+      // Voice restarts, or the adapter is disposed, while the tool is in flight.
+      input.invalidate();
+      const late = await input.command({ action: 'move' }, { turnId: 'turn-1', source: 'voice' });
+      steps.push(check('work from a previous generation is refused', late.status === 'rejected', describe(late)));
+      steps.push(check('nothing was committed', editor.engine.getSnapshot().scene.revision === 0, `revision ${editor.engine.getSnapshot().scene.revision}`));
+
+      // Tracking loss must stop positional commits.
+      input.select('obj_chair_01');
+      input.point({ position: [-1.0, 0, 1.0], surfaceId: floor, kind: 'surface' });
+      editor.engine.setTracking(false);
+      const blind = await input.command({ action: 'move' }, { source: 'voice' });
+      steps.push(check('a positional edit waits for reliable tracking', blind.status === 'rejected' && blind.refusal === 'tracking_lost', describe(blind)));
+      editor.engine.setTracking(true);
+
+      // Dwell selection needs sustained intent, not a passing glance.
+      const fresh = new InputCoordinator(editor);
+      steps.push(check('a glance does not select', fresh.dwell('obj_bed_01') === false && fresh.getSelection() === null, 'no selection'));
+      steps.push(check('a different target resets the dwell', fresh.dwell('obj_table_01') === false, 'reset'));
+      return steps;
+    },
+  },
+  // ---------------------------------------------------------------- M7
+  {
+    id: 'restyle-bedroom',
+    title: 'A blue bedroom with three frames on the window wall',
+    milestone: 'M7',
+    gate: 'recipe',
+    scene: sampleRoom,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const result = await editor.restyle(
+        {
+          label: 'a blue bedroom with three frames',
+          items: [
+            { family: 'bed', count: 1, color: '#3b6ea5' },
+            { family: 'frame', count: 3, color: '#2f2f33', surface_id: 'srf_wall_north' },
+          ],
+          wall_color: '#5b7fa8',
+        },
+        context(editor, null),
+      );
+      steps.push(check('the arrangement commits', result.status === 'applied', describe(result)));
+
+      const scene = editor.engine.getSnapshot().scene;
+      const frames = scene.design.objects.filter((o) => o.refined_class === 'frame');
+      steps.push(check('three distinct frames exist', frames.length === 3 && new Set(frames.map((f) => f.id)).size === 3, frames.map((f) => f.id).join(', ')));
+      steps.push(check('the palette reached the walls', scene.design.surfaces.filter((s) => s.class === 'wall').every((s) => s.material_ref === '#5b7fa8'), 'all walls repainted'));
+
+      // The window spans x -0.7..0.7 on the north wall. A frame overlapping it would
+      // have been a `blocks_window` violation, so this is belt and braces on geometry
+      // the engine already refused to commit.
+      const clear = frames.every((f) => Math.abs(f.pose.position[0] ?? 0) - (f.dimensions[0] ?? 0) / 2 > 0.7);
+      steps.push(check('no frame is hung over the window', clear, frames.map((f) => (f.pose.position[0] ?? 0).toFixed(2)).join(', ')));
+
+      const group = Object.values(scene.groups).find((g) => g.family === 'frame');
+      steps.push(check('the group records its member order', !!group && group.order.length === 3, group?.order.join(',') ?? 'no group'));
+      // Equal spacing IN USABLE WALL SPACE: the window splits the wall, so the members
+      // sharing a run sit exactly the recorded pitch apart.
+      const sorted = [...frames].sort((a, b) => (a.pose.position[0] ?? 0) - (b.pose.position[0] ?? 0));
+      const gaps = sorted.slice(1).map((f, i) => Math.abs((f.pose.position[0] ?? 0) - (sorted[i]?.pose.position[0] ?? 0)));
+      const matched = group ? gaps.some((g) => Math.abs(g - group.spacingM) < 1e-3) : false;
+      steps.push(check('members in one run are evenly spaced', matched, `gaps ${gaps.map((g) => g.toFixed(2)).join(', ')} vs pitch ${group?.spacingM}`));
+
+      // Distinct AND editable: recolouring one must not touch the other two.
+      const one = await editor.intent({ action: 'color', target_id: frames[0]!.id, color: '#ff0000' }, context(editor, null));
+      const after = editor.engine.getSnapshot().scene.design.objects.filter((o) => o.refined_class === 'frame');
+      steps.push(check('each frame is individually editable', one.status === 'applied' && after.filter((f) => f.material_ref === '#ff0000').length === 1, describe(one)));
+      return steps;
+    },
+  },
+  {
+    id: 'group-count',
+    title: 'Frame count two to three to two keeps member identity',
+    milestone: 'M7',
+    gate: 'recipe',
+    scene: sampleRoom,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const first = await editor.restyle(
+        { label: 'two frames', items: [{ family: 'frame', count: 2, surface_id: 'srf_wall_south' }] },
+        context(editor, null),
+      );
+      steps.push(check('two frames are hung', first.status === 'applied', describe(first)));
+      const groupId = Object.values(editor.engine.getSnapshot().scene.groups)[0]?.id ?? '';
+      const two = [...(editor.engine.getSnapshot().scene.groups[groupId]?.order ?? [])];
+      const pitchTwo = editor.engine.getSnapshot().scene.groups[groupId]?.spacingM ?? 0;
+      const at = (list: string[], i: number) => list[i] ?? '';
+
+      const grown = await editor.intent({ action: 'group_edit', group_id: groupId, count: 3 }, context(editor, null));
+      steps.push(check('the count increases', grown.status === 'applied', describe(grown)));
+      const three = [...(editor.engine.getSnapshot().scene.groups[groupId]?.order ?? [])];
+      const pitchThree = editor.engine.getSnapshot().scene.groups[groupId]?.spacingM ?? 0;
+      steps.push(check('the original members keep their ids', three.length === 3 && at(three, 0) === at(two, 0) && at(three, 1) === at(two, 1), `${two.join(',')} -> ${three.join(',')}`));
+      steps.push(check('only the difference was added', new Set(three).size === 3 && !two.includes(at(three, 2)), `added ${at(three, 2)}`));
+      steps.push(check('spacing was recomputed', Math.abs(pitchThree - pitchTwo) > 1e-6, `${pitchTwo} -> ${pitchThree}`));
+
+      const shrunk = await editor.intent({ action: 'group_edit', group_id: groupId, count: 2 }, context(editor, null));
+      steps.push(check('the count decreases', shrunk.status === 'applied', describe(shrunk)));
+      const back = [...(editor.engine.getSnapshot().scene.groups[groupId]?.order ?? [])];
+      const live = editor.engine.getSnapshot().scene.design.objects.filter((o) => o.state === 'present').map((o) => o.id);
+      steps.push(check('it trims from the end of the established order', back.length === 2 && at(back, 0) === at(two, 0) && at(back, 1) === at(two, 1), back.join(',')));
+      steps.push(check('the removed member is gone from the room', !live.includes(at(three, 2)), `${live.length} objects left`));
+      return steps;
+    },
+  },
+  {
+    id: 'layout-infeasible',
+    title: 'A bed and two nightstands that cannot fit',
+    milestone: 'M7',
+    gate: 'layout',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const before = editor.engine.getSnapshot().scene;
+      const result = await editor.restyle(
+        {
+          label: 'a big bed and two nightstands',
+          items: [
+            { family: 'bed', count: 1, dimensions: [2.4, 0.6, 2.5] },
+            { family: 'cabinet', count: 2 },
+          ],
+        },
+        context(editor, null),
+      );
+      steps.push(check('it refuses rather than improvises', result.status === 'rejected', describe(result)));
+      steps.push(check('the refusal explains the conflict', /nowhere|overlap|door/i.test(result.message), result.message));
+      steps.push(check('alternatives are offered', result.conflicts.length > 0, result.conflicts.join(' | ')));
+
+      const after = editor.engine.getSnapshot().scene;
+      steps.push(check('nothing was partially committed', after.design.objects.length === before.design.objects.length && after.revision === before.revision, `${after.design.objects.length} objects at revision ${after.revision}`));
+      steps.push(check('nothing was silently shrunk', after.design.objects.every((o, i) => o.dimensions.join() === (before.design.objects[i]?.dimensions ?? []).join()), 'dimensions unchanged'));
+      return steps;
+    },
+  },
+  {
+    id: 'restyle-preserve',
+    title: 'A restyle that preserves a selected object',
+    milestone: 'M7',
+    gate: 'transaction',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const result = await editor.restyle(
+        {
+          label: 'restyle but keep the desk',
+          items: [{ family: 'cabinet', count: 1 }],
+          preserve_ids: ['obj_table_01'],
+          hide_ids: ['obj_bed_01'],
+        },
+        context(editor, null),
+      );
+      steps.push(check('the restyle commits', result.status === 'applied', describe(result)));
+
+      const scene = editor.engine.getSnapshot().scene;
+      const table = scene.design.objects.find((o) => o.id === 'obj_table_01');
+      steps.push(check('the preserved object is still visible', table?.state === 'present', table ? 'present' : 'gone'));
+
+      // Still an OBSTACLE, not just still drawn: a probe at its pose must be refused.
+      const index = buildIndex(scene, 'probe');
+      const probe = {
+        id: 'probe',
+        class: 'storage' as const,
+        dimensions: [0.6, 0.6, 0.6] as Vec3,
+        pose: { position: [...table!.pose.position] as Vec3, yaw: 0 },
+        pivot: 'base_center' as const,
+      };
+      const finding = evaluatePlacement(scene, probe as never, { index, skipNotes: true });
+      steps.push(check('the preserved object still blocks placement', finding.violations.some((v) => v.with === 'obj_table_01'), finding.violations.map((v) => `${v.type}:${v.with}`).join(', ') || 'no violation'));
+
+      // Visibility intent is NOT physical removal.
+      steps.push(check('the hidden object is recorded as intent', scene.removalMaskIds.includes('obj_bed_01'), scene.removalMaskIds.join(',')));
+      steps.push(check('hiding it did not delete the physical object', !scene.removedPhysicalIds.includes('obj_bed_01') && scene.measured.objects.some((o) => o.id === 'obj_bed_01'), 'measured observation retained'));
+      steps.push(check('the intent names the reconstruction it was made against', scene.removalMaskCalibration?.calibrationId === scene.calibrationId, JSON.stringify(scene.removalMaskCalibration)));
+      return steps;
+    },
+  },
+  {
+    id: 'restyle-undo',
+    title: 'Undo restores objects, surfaces, groups and visibility intent together',
+    milestone: 'M7',
+    gate: 'transaction',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const before = JSON.parse(JSON.stringify(editor.engine.getSnapshot().scene)) as EditorState;
+      const result = await editor.restyle(
+        {
+          label: 'restyle everything',
+          items: [{ family: 'frame', count: 2, surface_id: 'srf_wall_south' }],
+          wall_color: '#223344',
+          hide_ids: ['obj_bed_01'],
+        },
+        context(editor, null),
+      );
+      steps.push(check('the restyle commits', result.status === 'applied', describe(result)));
+      const mid = editor.engine.getSnapshot().scene;
+      steps.push(check('it advanced the revision exactly once', mid.revision === before.revision + 1, `${before.revision} -> ${mid.revision}`));
+
+      const undone = await editor.intent({ action: 'undo' }, context(editor, null));
+      steps.push(check('undo succeeds', undone.status === 'applied', describe(undone)));
+      const after = editor.engine.getSnapshot().scene;
+      steps.push(check('objects are restored', after.design.objects.length === before.design.objects.length, `${after.design.objects.length} objects`));
+      steps.push(check('surfaces are restored', after.design.surfaces.every((s, i) => s.material_ref === before.design.surfaces[i]?.material_ref), 'colours restored'));
+      steps.push(check('groups are restored', Object.keys(after.groups).length === Object.keys(before.groups).length, `${Object.keys(after.groups).length} groups`));
+      steps.push(check('visibility intent is restored', after.removalMaskIds.length === before.removalMaskIds.length, `${after.removalMaskIds.length} masked`));
+      return steps;
+    },
+  },
+  {
+    id: 'structure-resolve',
+    title: 'A wall moved into furniture gives a complete alternative or refuses whole',
+    milestone: 'M7',
+    gate: 'layout',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const before = editor.engine.getSnapshot().scene;
+      const moved = await editor.intent(
+        { action: 'structure', target_id: 'srf_wall_east', structure_kind: 'offset_wall', metres: 0.6 },
+        context(editor, null),
+      );
+      const complete = moved.status === 'adjusted' && moved.refusal === 'awaiting_confirmation';
+      const refusedWhole = moved.status === 'rejected';
+      steps.push(check('it is a complete alternative or a whole refusal', complete || refusedWhole, describe(moved)));
+      steps.push(check('nothing committed before the answer', editor.engine.getSnapshot().scene.revision === before.revision, `revision ${editor.engine.getSnapshot().scene.revision}`));
+      if (complete) {
+        steps.push(check('the alternative says what would move', /move/i.test(moved.report?.adjustment_reason ?? ''), moved.report?.adjustment_reason ?? ''));
+        const confirmed = await editor.intent({ action: 'confirm' }, context(editor, null));
+        steps.push(check('confirming applies the whole change', confirmed.status === 'applied', describe(confirmed)));
+        const after = editor.engine.getSnapshot().scene;
+        const index = buildIndex(after, '');
+        const valid = after.design.objects
+          .filter((o) => o.state === 'present')
+          .every((o) => evaluatePlacement(after, o, { index, skipNotes: true }).violations.length === 0);
+        steps.push(check('every object is valid afterwards', valid, 'no violations'));
+      } else {
+        steps.push(check('the refusal names the obstruction', (moved.report?.violations_resolved.length ?? 0) > 0, describe(moved)));
+      }
+      return steps;
+    },
+  },
+  {
+    id: 'three-legged-bed',
+    title: 'A three-legged bed is refused with a supported alternative',
+    milestone: 'M7',
+    gate: 'construction',
+    scene: sampleRoom,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const result = await editor.intent(
+        { action: 'add', family: 'bed', legs: 3 },
+        context(editor, onFloor(editor, [0, 0, 0])),
+      );
+      steps.push(check('it is refused, not approximated', result.status === 'rejected' && result.refusal === 'construction_invalid', describe(result)));
+      steps.push(check('the refusal names the missing template', /three|3-support/i.test(result.message) && /template/i.test(result.message), result.message));
+      steps.push(check('a supported alternative is offered', /four-legged|three-legged table/i.test(result.message), result.message));
+      steps.push(check('the assumptions travel with it', result.caveats.some((c) => /not verified/i.test(c)), result.caveats.join(' | ')));
+      steps.push(check('nothing was added', editor.engine.getSnapshot().scene.design.objects.length === 0, 'room still empty'));
+
+      // The authored three-support template that DOES exist behaves differently: a
+      // tripod table is buildable and carries its edge-load finding as a caveat.
+      const tripod = await editor.intent(
+        { action: 'add', family: 'table', legs: 3 },
+        context(editor, onFloor(editor, [0, 0, 0])),
+      );
+      const assembly = Object.values(editor.engine.getSnapshot().scene.assemblies)[0];
+      steps.push(check('the authored tripod table is allowed', tripod.status === 'applied', describe(tripod)));
+      steps.push(check('its construction result names the template version', assembly?.constructionResult?.templateVersion === '1.1.0', assembly?.constructionResult?.templateVersion ?? 'none'));
+      steps.push(check('its edge-load finding is recorded, not hidden', assembly?.constructionResult?.status === 'needs-adjustment' && assembly.constructionResult.findings.some((f) => f.code === 'unbalanced'), assembly?.constructionResult?.findings.map((f) => f.code).join(',') ?? ''));
+
+      // M7.5.3: a dimension change re-runs the authored checks. A shelf that was fine
+      // at 0.8m is not fine at 1.4m, and the verdict has to move with the geometry
+      // rather than stay at whatever it was when the object was created.
+      const shelf = await editor.intent(
+        { action: 'add', family: 'shelf' },
+        // The south wall: no opening, so this measures construction and nothing else.
+        context(editor, { position: [0, 1.2, 2.0], surfaceId: 'srf_wall_south', kind: 'surface' }),
+      );
+      const shelfId = editor.engine.getSnapshot().scene.design.objects.find((o) => o.refined_class === 'shelf')?.id;
+      const asBuilt = shelfId ? editor.engine.getSnapshot().scene.assemblies[shelfId]?.constructionResult : undefined;
+      steps.push(check('a short shelf starts valid', shelf.status === 'applied' && asBuilt?.status === 'valid-within-template', `${describe(shelf)} / ${asBuilt?.status}`));
+      const stretched = await editor.intent(
+        { action: 'resize', target_id: shelfId, width_delta_m: 0.6 },
+        context(editor, null),
+      );
+      const after = shelfId ? editor.engine.getSnapshot().scene.assemblies[shelfId]?.constructionResult : undefined;
+      steps.push(check('the resize is resolved from the current size', stretched.status !== 'rejected' || /size/i.test(stretched.message), describe(stretched)));
+      steps.push(check('construction was re-validated against the new size', after?.status === 'needs-adjustment' && after.findings.some((f) => f.code === 'span_exceeded'), `${after?.status}: ${after?.findings.map((f) => f.code).join(',')}`));
+      return steps;
+    },
+  },
+  {
+    id: 'stale-proposal',
+    title: 'A proposal arriving after another commit is rejected',
+    milestone: 'M7',
+    gate: 'transaction',
+    scene: sampleRoom,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const scene = editor.engine.getSnapshot().scene;
+      const recipe = SceneRecipeSchema.parse({
+        label: 'a frame wall',
+        items: [{ family: 'frame', count: 2, surfaceId: 'srf_wall_south' }],
+      });
+      const proposal = planLayout(scene, recipe, { proposalId: 'stale-1', build: buildObject });
+      steps.push(check('the plan is complete', proposal.status === 'complete', proposal.explanation));
+
+      // Something else commits in the meantime.
+      const other = await editor.intent({ action: 'paint', paint_target: 'surface', surface_id: 'srf_floor', color: '#101010' }, context(editor, null));
+      steps.push(check('an unrelated edit commits', other.status === 'applied', describe(other)));
+
+      const applied = editor.engine.applyProposal(proposal, 'stale-op', { build: buildObject });
+      steps.push(check('the stale proposal is refused', applied.status === 'rejected' && applied.refusal === 'stale_revision', describe(applied)));
+      const after = editor.engine.getSnapshot().scene;
+      steps.push(check('the current design is preserved', after.design.objects.length === 0 && after.design.surfaces.find((s) => s.class === 'floor')?.material_ref === '#101010', `${after.design.objects.length} objects`));
+      return steps;
+    },
+  },
+  {
+    id: 'search-limit',
+    title: 'Reaching the evaluation limit is not a proof of impossibility',
+    milestone: 'M7',
+    gate: 'budget',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const scene = editor.engine.getSnapshot().scene;
+      const recipe = SceneRecipeSchema.parse({
+        label: 'four beds',
+        items: [{ family: 'bed', count: 4 }],
+      });
+      const bounded = planLayout(scene, recipe, { proposalId: 'budget-1', build: buildObject, maxEvaluations: 40 });
+      steps.push(check('it stops at the budget', bounded.status === 'search_exhausted' && bounded.exhausted, `${bounded.status} after ${bounded.evaluations}`));
+      steps.push(check('it stays inside the budget', bounded.evaluations <= 40, `${bounded.evaluations} evaluations`));
+      steps.push(check('it says the limit was the limit', /budget|not a proof/i.test(bounded.explanation), bounded.explanation));
+      steps.push(check('it commits nothing', bounded.placements.length === 0, `${bounded.placements.length} placements`));
+
+      // The SAME request with the real budget proves a conflict instead. Two different
+      // claims, two different statuses - which is the whole point of the distinction.
+      const full = planLayout(scene, recipe, { proposalId: 'budget-2', build: buildObject });
+      steps.push(check('with the full budget it proves the conflict', full.status === 'infeasible' && !full.exhausted, `${full.status} after ${full.evaluations}`));
+      steps.push(check('the full search stays under the declared cap', full.evaluations <= MAX_EVALUATIONS, `${full.evaluations} of ${MAX_EVALUATIONS}`));
+
+      // The object cap is reported as a bound too, never as geometry.
+      const many = planLayout(scene, SceneRecipeSchema.parse({ label: 'too many', items: [{ family: 'frame', count: 12 }, { family: 'cabinet', count: 4 }] }), { proposalId: 'budget-3', build: buildObject });
+      steps.push(check('the object cap is a bound, not a conflict', many.status === 'search_exhausted' && /bounded to/.test(many.explanation), many.explanation));
+      return steps;
+    },
+  },
+  {
+    id: 'plan-deterministic',
+    title: 'The same recipe and room plan identically',
+    milestone: 'M7',
+    gate: 'layout',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const scene = editor.engine.getSnapshot().scene;
+      const recipe = SceneRecipeSchema.parse({
+        label: 'a mixed arrangement',
+        items: [
+          { family: 'cabinet', count: 2 },
+          { family: 'frame', count: 3, surfaceId: 'srf_wall_south' },
+        ],
+      });
+      const runs = [0, 1, 2].map((n) =>
+        JSON.stringify(planLayout(scene, recipe, { proposalId: `det-${n}`, build: buildObject }).placements),
+      );
+      steps.push(check('three plans agree byte for byte', runs.every((r) => r === runs[0]), `${runs[0]!.length} bytes`));
+
+      // Validation output must be stable too, not just geometry.
+      const results = [0, 1].map((n) =>
+        JSON.stringify(
+          planLayout(scene, recipe, { proposalId: `det-v${n}`, build: buildObject }).placements.map((pl) => pl.construction),
+        ),
+      );
+      steps.push(check('construction results agree', results[0] === results[1], 'identical'));
+      return steps;
+    },
+  },
+  {
+    id: 'reconstruction-never-erases',
+    title: 'A reconstruction manifest alone never erases furniture',
+    milestone: 'M7',
+    gate: 'transaction',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const before = editor.engine.getSnapshot().scene;
+      steps.push(check('nothing is masked to begin with', before.removalMaskIds.length === 0, 'empty'));
+
+      // A manifest naming removed objects is exactly what M5 produces. Adopting the
+      // calibration it belongs to must not turn that list into an erasure.
+      const manifest = {
+        calibrationId: 'srv-1',
+        calibrationRevision: 0,
+        frameId: before.frameId,
+        artifacts: [
+          { key: 'atlas.png', role: 'atlas' as const, inferred: true },
+          { key: 'shell.json', role: 'shell' as const, inferred: false },
+        ],
+        removedObjectIds: ['obj_bed_01', 'obj_table_01'],
+      };
+      editor.engine.adoptCalibration(manifest.calibrationId);
+      const after = editor.engine.getSnapshot().scene;
+      steps.push(check('the manifest erased nothing', after.removalMaskIds.length === 0 && after.removedPhysicalIds.length === 0, `${after.removalMaskIds.length} masked, ${after.removedPhysicalIds.length} removed`));
+      steps.push(check('the furniture is all still there', after.design.objects.filter((o) => o.state === 'present').length === before.design.objects.length, `${after.design.objects.length} objects`));
+
+      // Only an explicit intent sets it, and only for a MEASURED id.
+      const asked = await editor.restyle(
+        { label: 'hide the bed', items: [{ family: 'frame', count: 1, surface_id: 'srf_wall_south' }], hide_ids: ['obj_bed_01', 'not_a_real_object'] },
+        context(editor, null),
+      );
+      const masked = editor.engine.getSnapshot().scene;
+      steps.push(check('an explicit request does set it', asked.status === 'applied' && masked.removalMaskIds.includes('obj_bed_01'), describe(asked)));
+      steps.push(check('an id that was never measured is not recorded', !masked.removalMaskIds.includes('not_a_real_object'), masked.removalMaskIds.join(',')));
+      return steps;
+    },
+  },
+  {
+    id: 'legacy-style-expansion',
+    title: 'A legacy style plan expands into the same validated transaction',
+    milestone: 'M7',
+    gate: 'legacy',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      const scene = editor.engine.getSnapshot().scene;
+      const expansion = expandLegacyPlan(scene, {
+        summary: 'Warmer walls and a dresser by the window.',
+        ops: [
+          { type: 'CHANGE_COLOR', target_id: 'srf_wall_north', color_hex: '#c8b8a0' },
+          { type: 'ADD_OBJECT', target_id: 'obj_new_1', catalog_id: 'cat_dresser_oak', relation: 'against_wall', anchor_id: 'srf_wall_north' },
+          { type: 'CHANGE_MATERIAL', target_id: 'obj_table_01', material_ref: 'mat_walnut' },
+          { type: 'ADD_OBJECT', target_id: 'obj_new_2', catalog_id: 'cat_chandelier', relation: 'centered_in' },
+        ],
+      });
+      steps.push(check('the supported ops became recipe items', expansion.recipe.items.length === 1 && expansion.recipe.items[0]!.family === 'cabinet', expansion.recipe.items.map((i) => i.family).join(',')));
+      steps.push(check('the wall colour became a palette', expansion.recipe.wall_color === '#c8b8a0', expansion.recipe.wall_color ?? 'none'));
+      steps.push(check('unsupported families are reported, not approximated', expansion.skipped.some((s) => s.op.catalog_id === 'cat_chandelier' && /no authored template/.test(s.reason)), expansion.skipped.map((s) => s.reason).join(' | ')));
+      steps.push(check('a legacy material ref is not read as a structural class', expansion.skipped.some((s) => s.op.type === 'CHANGE_MATERIAL'), 'skipped'));
+      steps.push(check('untouched furniture is preserved', expansion.recipe.preserve_ids?.includes('obj_bed_01') === true, expansion.recipe.preserve_ids?.join(',') ?? ''));
+
+      const result = await editor.restyle(expansion.recipe, context(editor, null));
+      steps.push(check('it commits through the same transaction', result.status === 'applied', describe(result)));
+      const after = editor.engine.getSnapshot().scene;
+      steps.push(check('one revision for the whole plan', after.revision === scene.revision + 1, `${scene.revision} -> ${after.revision}`));
+      steps.push(check('the wall was repainted and the dresser placed', after.design.surfaces.find((s) => s.id === 'srf_wall_north')?.material_ref === '#c8b8a0' && after.design.objects.some((o) => o.refined_class === 'cabinet'), 'both applied'));
       return steps;
     },
   },

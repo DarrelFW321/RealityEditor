@@ -18,6 +18,8 @@ import { RealtimeVoice } from '../adapters/realtime';
 import { evaluateSpatialFrame } from '../adapters/roomplan';
 import { SceneView } from './SceneView';
 import { resolveHand } from '../adapters/hand';
+import { InputCoordinator } from '../runtime/coordinator';
+import { applyToPoint, roomFromWorld } from '../adapters/room-space';
 import {
   checkDeterminism,
   runScenario,
@@ -66,11 +68,65 @@ export function EditorPanel({
   // measured room is the working surface, and the shell is something you turn on to look
   // at rather than something that silently replaces what you were editing against.
   const [showShell, setShowShell] = useState(false);
+  /** M7.6.5: planning progress is its OWN indicator. A layout search takes long enough
+   * that reusing the per-edit latency line would read as one very slow edit. */
+  const [planning, setPlanning] = useState<string | null>(null);
+  const [proposal, setProposal] = useState<string | null>(null);
   const [gate, setGate] = useState<ScenarioResult[]>([]);
   const [gateRunning, setGateRunning] = useState<Scenario['milestone'] | null>(null);
   const [gateMilestone, setGateMilestone] = useState<Scenario['milestone'] | null>(null);
   const renderFps = useRef(0);
   const slot = useRef(new AdapterSlot<RealtimeVoice>(editor.diagnostics));
+  // One owner for selection, destination and turn binding, shared by hands, touch and
+  // voice. The React state below mirrors it for rendering; the coordinator is the source.
+  const input = useRef(new InputCoordinator(editor));
+  useEffect(() => {
+    // 10Hz, unconditionally. Sampling only on change meant a stationary selection had no
+    // recent sample for a speech turn to bind against.
+    const timer = setInterval(() => {
+      input.current.sample();
+      // The SCP needs a viewpoint. Taken from the same tracked frame the renderer uses,
+      // converted into room space once here rather than in the packet builder.
+      const tracked = frame?.current;
+      if (tracked) {
+        const toRoom = roomFromWorld(tracked.roomAnchor, origin ?? [0, 0, 0]);
+        const eye = applyToPoint(toRoom, {
+          x: tracked.cameraToWorld[12] ?? 0,
+          y: tracked.cameraToWorld[13] ?? 0,
+          z: tracked.cameraToWorld[14] ?? 0,
+        });
+        // Camera forward is -Z of the pose, rotated into room space.
+        const f = { x: -(tracked.cameraToWorld[8] ?? 0), y: -(tracked.cameraToWorld[9] ?? 0), z: -(tracked.cameraToWorld[10] ?? 0) };
+        const rotated = {
+          x: toRoom[0]! * f.x + toRoom[4]! * f.y + toRoom[8]! * f.z,
+          y: toRoom[1]! * f.x + toRoom[5]! * f.y + toRoom[9]! * f.z,
+          z: toRoom[2]! * f.x + toRoom[6]! * f.y + toRoom[10]! * f.z,
+        };
+        const hand = tracked.hand;
+        input.current.setView({
+          position: [eye.x, eye.y, eye.z],
+          forward: [rotated.x, rotated.y, rotated.z],
+          fovDeg: 68,
+          screenPoint: hand?.x !== undefined && hand.y !== undefined ? [hand.x, hand.y] : [0.5, 0.5],
+          pointingConfidence: hand?.confidence ?? 1,
+          pointingSource: hand?.visible ? 'hand' : 'phone',
+        });
+      }
+    }, 100);
+    return () => clearInterval(timer);
+  }, [frame, origin]);
+  useEffect(
+    () =>
+      input.current.subscribe(() => {
+        setSelected(input.current.getSelection());
+        setDestination(input.current.getDestination());
+      }),
+    [],
+  );
+  useEffect(() => {
+    const coordinator = input.current;
+    return () => coordinator.dispose();
+  }, []);
   // One clock everywhere: epoch milliseconds. Attention binds against this.
   const context = useRef<InteractionContext>({
     turnId: 'manual',
@@ -93,8 +149,16 @@ export function EditorPanel({
     return () => clearInterval(timer);
   }, [dev]);
   useEffect(() => {
-    sync({ revision: snapshot.scene.revision, selectedId: selected, destination });
-  }, [selected, destination, snapshot.scene.revision]);
+    // frameId was initialised once at mount and never refreshed, so a re-measure
+    // without a remount made every attention bind miss with `other_frame` and every
+    // intent fail as stale. It is part of scene identity and has to track the scene.
+    sync({
+      revision: snapshot.scene.revision,
+      frameId: snapshot.scene.frameId,
+      selectedId: selected,
+      destination,
+    });
+  }, [selected, destination, snapshot.scene.revision, snapshot.scene.frameId]);
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (s) => {
       if (s !== 'active') {
@@ -142,12 +206,15 @@ export function EditorPanel({
                 kind: hit.objectId ? ('object' as const) : ('surface' as const),
               }
             : null;
-        if (asDestination) setDestination(asDestination);
+        if (asDestination) input.current.point(asDestination, 'hand');
         if (down && !pinched && hit?.objectId && state.phase !== 'held') {
-          setSelected(hit.objectId);
+          input.current.select(hit.objectId, 'hand');
           sync({ selectedId: hit.objectId });
           editor.engine.begin(hit.objectId);
         }
+        // Point-and-dwell: holding a target for 500ms selects it without a pinch.
+        if (!down && state.phase !== 'held')
+          input.current.dwell(hit?.objectId ?? null, hand.tracking === 'normal');
         if (down && state.phase === 'held' && asDestination && state.preview)
           editor.engine.preview({ position: asDestination.position, yaw: state.preview.pose.yaw });
         // Only a held transaction may be released; a settle in flight must not be re-entered.
@@ -161,7 +228,10 @@ export function EditorPanel({
           void editor.engine.release(editor.nextId(), context.current.destination.surfaceId);
         if (hand.hand?.x === undefined && pinched) editor.engine.cancel();
         pinched = down;
-        sync({ destination: asDestination ?? context.current.destination });
+        // The coordinator owns the destination and times it; re-latching the previous
+        // one here every frame kept a stale destination alive forever, which is what the
+        // two-second freshness rule exists to prevent.
+        sync({ destination: input.current.getDestination() });
       }
       raf = requestAnimationFrame(tick);
     };
@@ -179,7 +249,17 @@ export function EditorPanel({
       // Repeating a solver-heavy scenario is the only check that a result was reasoned
       // rather than sampled.
       const repeatable = scenariosFor(milestone).find(
-        (s) => s.id === { M2: 'overlap', M3: 'carry-adjust', M4: 'calib-inferred' }[milestone],
+        (s) =>
+          s.id ===
+          {
+            M2: 'overlap',
+            M3: 'carry-adjust',
+            M4: 'calib-inferred',
+            M6: 'input-ordering',
+            M7: 'plan-deterministic',
+          }[
+            milestone
+          ],
       );
       if (repeatable) {
         const repeat = await checkDeterminism(repeatable);
@@ -190,6 +270,30 @@ export function EditorPanel({
       setGateRunning(null);
     }
   }
+  /**
+   * The touch half of M7.3.7: the same coordinator, the same planner and the same
+   * transaction the voice tool uses. Not a parallel implementation — if this drifted
+   * from the voice path, "available to touch and voice" would stop being true.
+   */
+  async function runRestyle(recipe: unknown) {
+    setPlanning('Planning the layout…');
+    try {
+      const result = await input.current.restyle(recipe, { source: 'touch' }, (stage) =>
+        setPlanning(stage === 'planning' ? 'Planning the layout…' : null),
+      );
+      setMessage([result.message, ...result.conflicts].join(' '));
+      setProposal(
+        result.refusal === 'awaiting_confirmation'
+          ? (editor.pendingProposal()?.explanation ?? 'Apply this arrangement?')
+          : null,
+      );
+    } catch {
+      setMessage('That arrangement could not be planned.');
+    } finally {
+      setPlanning(null);
+    }
+  }
+
   async function run(intent: Intent | unknown) {
     try {
       const result = await editor.intent(intent, context.current);
@@ -208,15 +312,12 @@ export function EditorPanel({
     setConnecting(true);
     try {
       await slot.current.replace(() => {
-        const adapter = new RealtimeVoice(
+        return new RealtimeVoice(
           process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8787',
           editor.diagnostics,
-          editor.intent,
+          input.current,
           setMessage,
-          editor.attention,
         );
-        adapter.setContext(context.current);
-        return adapter;
       });
       setVoice(true);
     } catch (error) {
@@ -227,7 +328,9 @@ export function EditorPanel({
   }
   function point(position: Vec3, surfaceId: string, kind: 'surface' | 'object' = 'surface') {
     const next = { position, surfaceId, kind };
-    setDestination(next);
+    // Through the coordinator, which notifies the mirror above. Pointing at a
+    // destination never changes the selection.
+    input.current.point(next, 'touch');
     sync({ destination: next });
     if (snapshot.phase === 'held' && snapshot.preview)
       editor.engine.preview({ position, yaw: snapshot.preview.pose.yaw });
@@ -249,7 +352,7 @@ export function EditorPanel({
         <SceneView
           snapshot={snapshot}
           selectedId={selected}
-          onSelect={setSelected}
+          onSelect={(id) => input.current.select(id, 'touch')}
           onPoint={point}
           onRelease={release}
           frame={frame}
@@ -312,6 +415,25 @@ export function EditorPanel({
             {caveat}
           </Text>
         ))}
+        {planning && <Text style={styles.detail}>{planning}</Text>}
+        {proposal && (
+          <View style={styles.row}>
+            <Button
+              title="Apply it"
+              onPress={() => {
+                setProposal(null);
+                void input.current.confirm().then((r) => setMessage(r.message));
+              }}
+            />
+            <Button
+              title="Leave it"
+              onPress={() => {
+                setProposal(null);
+                void run({ action: 'cancel' });
+              }}
+            />
+          </View>
+        )}
         {snapshot.pending && (
           <View style={styles.row}>
             <Button
@@ -341,6 +463,27 @@ export function EditorPanel({
               <Text style={styles.text}>+ {family}</Text>
             </Pressable>
           ))}
+          <Pressable
+            style={styles.chip}
+            disabled={planning !== null}
+            onPress={() =>
+              void runRestyle({
+                label: 'a blue bedroom with three frames',
+                items: [
+                  { family: 'bed', count: 1, color: '#3b6ea5' },
+                  {
+                    family: 'frame',
+                    count: 3,
+                    color: '#2f2f33',
+                    ...(destination?.surfaceId ? { surface_id: destination.surfaceId } : {}),
+                  },
+                ],
+                wall_color: '#5b7fa8',
+              })
+            }
+          >
+            <Text style={styles.text}>✦ blue bedroom</Text>
+          </Pressable>
         </ScrollView>
         {object && (
           <>
@@ -590,7 +733,7 @@ export function EditorPanel({
               />
             )}
             <View style={styles.row}>
-              {(['M2', 'M3', 'M4'] as const).map((milestone) => (
+              {(['M2', 'M3', 'M4', 'M6', 'M7'] as const).map((milestone) => (
                 <Button
                   key={milestone}
                   title={gateRunning === milestone ? 'Running…' : `Run ${milestone} gate`}
