@@ -4,6 +4,30 @@ Status: implementation in progress. See [current code, verification and remainin
 
 Product and architecture reference: [Expo migration PRD](prd-expo-migration.md). Isolation means independently buildable, replaceable modules so new implementations can be inserted without rewriting the application. No new testing workstream, test frameworks, or CI test suites are in scope. Retain diagnostics throughout implementation. Keep Fastify.
 
+## Remaining milestone plans — M6 through M9
+
+Planning baseline, 2026-09-19: **M5 is complete, as confirmed by the project owner.** The detailed plans below define the remaining implementation and acceptance work. They take precedence over the shorter M6–M9 outlines in this document where the detail differs. Historical evidence records remain historical; this planning update does not claim a new device run or verification result.
+
+| Milestone | Goal | Detailed plan and completion checklist |
+|---|---|---|
+| M6 — Coordinated inputs | Hands, touch, and voice edit one scene with reliable turn binding and shared transactions | [Hands and voice](milestones/m6-hands-and-voice.md) |
+| M7 — Creation and restyling | Generate editable, valid layouts and commit restyles as one undoable transaction | [Creation and restyling](milestones/m7-creation-and-restyling.md) |
+| M8 — Live compositing | Erase unwanted furniture pixels while preserving foreground hands and correct depth ordering | [Live compositing](milestones/m8-live-compositing.md) |
+| M9 — Internal release candidate | Deliver a reproducible internal build with a verified full journey and operational recovery | [Internal release candidate](milestones/m9-internal-release-candidate.md) |
+
+Implementation order is **M6 → M7 → M8 → M9**. M8's native texture feasibility work can begin during M6; subsequent M8 transaction integration depends on M7. This dependency allows independent work but does not require parallel agents or additional staffing.
+
+### Agreed scope and completion rules
+
+- M9 targets internal distribution, not a public launch or App Store submission.
+- Live compositing must sustain at least **30 FPS**. 55–60 FPS is an optimization target, not a release blocker.
+- Retain Expo, R3F, the current RoomPlan/ARKit session, Apple Vision hand tracking, direct Realtime WebRTC, Fastify, and the reconstruction worker. Use one conversational model. Keep the legacy style endpoint compatible without adding a second conversational controller to the Expo journey.
+- Initial support is single-room editing on verified LiDAR iPhone/device-OS combinations. Non-LiDAR reconstruction, Android calibration, multiroom, accounts, persistent projects, and an offline product mode remain outside these milestones. Filament, Meshy, Backboard adoption, and world-model research are not dependencies.
+- The spatial engine remains the only writer of committed design state. Measured observations, inferred appearance, proposed design, and physical occupancy remain distinct.
+- Extend the existing development scenarios, gates, and diagnostic tools. Do not add a separate testing framework or testing workstream.
+- Treat implementation, local verification, and physical-device verification as separate checklist entries. A local gate cannot establish camera alignment, audio behavior, texture interoperability, or foreground preservation.
+- Every completion record names the commit, build, device/OS where applicable, adapter IDs, commands/scenarios, measured results, limitations, and evidence location. Leave unknown evidence explicitly unrecorded; do not infer it from an earlier milestone.
+
 ## Delivery approach
 
 Build an iOS-first Expo application alongside the existing Swift application. Move deterministic spatial behavior into a framework-independent TypeScript package, while keeping camera, tracking, rendering, voice transport, and reconstruction behind replaceable adapters. Preserve the existing application and API compatibility until the Expo release passes its device gates.

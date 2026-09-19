@@ -2,6 +2,8 @@
 
 Implementation started 2026-09-18. This is a working migration foundation, not a completed release. No automated testing workstream or test packages were added.
 
+Planning update, 2026-09-19: the project owner confirmed **M5 complete**. The remaining work is specified in the [M6–M9 implementation plans](implementation-plan-expo.md#remaining-milestone-plans--m6-through-m9), each with an ordered implementation sequence, acceptance scenarios, and completion checklist. The target is an internal release candidate, with a 30 FPS minimum for live compositing. Earlier evidence sections below describe the state when they were written; this documentation update adds no new verification claims.
+
 ## Implemented code
 
 - npm workspace with pinned Expo SDK 57, Vision Camera 5, R3F, WebRTC and compatible React Native dependencies; one root lockfile.
@@ -23,11 +25,11 @@ Implementation started 2026-09-18. This is a working migration foundation, not a
 | M2 Spatial engine | Implemented; gate scenarios pass locally | Relation and occupancy recomputation (M6), `APPLY_STYLE` expansion (M7), device demonstration |
 | M3 Carry/release | Implemented; gate scenarios pass locally | Device demonstration |
 | M4 Calibration | Implemented; gate scenarios pass locally against replayed captures | Device captures; non-LiDAR capture route; multiroom handling |
-| M5 Reconstruction | Implemented; SAM and LaMa run; gate scenarios pass locally | Device capture; verified cleanup across external providers |
-| M6 Hands/voice | Integration written | Device audio, fingertip alignment, turn/context timing and concurrent input demonstration |
-| M7 Creation/restyle | Procedural additions and basic edits implemented | General room-aware layout search, count-change groups, grouped mask/scene transactions, supported unusual assemblies |
-| M8 Compositing | Not implemented | Empty-shell textures, hand-preserving occlusion, temporal consistency |
-| M9 Release | Not ready | All dependent device and reconstruction gates |
+| M5 Reconstruction | Complete per project-owner confirmation, 2026-09-19 | Accepted baseline for M6–M9; historical evidence below is retained |
+| [M6 Hands/voice](milestones/m6-hands-and-voice.md) | Integration written; detailed plan available | Input coordination, turn binding, derived scene data, interruption handling, and device acceptance |
+| [M7 Creation/restyle](milestones/m7-creation-and-restyling.md) | Procedural additions and basic edits implemented; detailed plan available | Whole-layout search, stable groups, construction validation, and atomic scene/visibility transactions |
+| [M8 Compositing](milestones/m8-live-compositing.md) | Not implemented; detailed plan available | Native texture bridge, selective pixel replacement, foreground/depth handling, and sustained 30 FPS |
+| [M9 Internal release](milestones/m9-internal-release-candidate.md) | Not ready; detailed plan available | Integrated acceptance, supported-device evidence, staging operation, performance, and rollback |
 
 ## M2 spatial engine
 
