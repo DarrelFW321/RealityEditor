@@ -16,6 +16,7 @@ import type { Keyframe } from '@reality/contracts';
 import { CoverageTracker, reconstructionRoom, type CoverageMask } from '@reality/spatial-engine';
 import { ReconstructionRun, type ReconstructionPhase } from '../src/runtime/reconstruction';
 import type { Vec3 } from '@reality/contracts';
+import { apiURL } from '../src/runtime/api-url';
 
 const roomSweepDegrees = 270;
 
@@ -56,6 +57,7 @@ export default function Home() {
   const captureCount = useRef(0);
   const reconstruction = useRef<ReconstructionRun | null>(null);
   const [recon, setRecon] = useState<ReconstructionPhase>({ state: 'idle' });
+  const [depthInputs, setDepthInputs] = useState<{ ok: boolean; reason: string } | null>(null);
   // Registered references from the measurement sweep: pose + intrinsics from the same
   // ARFrame, so these are real keyframes rather than unregistered photographs.
   const keyframes = useRef<{ metadata: Keyframe; jpegBase64: string }[]>([]);
@@ -115,7 +117,7 @@ export default function Home() {
     // and then dropped; this is the first thing that consumes them.
     void (async () => {
       const run = new ReconstructionRun(
-        process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8787',
+        apiURL(),
       );
       reconstruction.current = run;
       run.subscribe(setRecon);
@@ -187,6 +189,14 @@ export default function Home() {
             onStatus={(e) => {
               setMessage(e.nativeEvent.message);
               if (e.nativeEvent.code === 'camera_owner') setSpatialOwner(e.nativeEvent.message);
+              // Depth and person segmentation are enabled lazily by the native side and
+              // can simply be unsupported. That verdict was emitted and read by nobody,
+              // so a device that cannot provide depth looked identical to one where the
+              // compositor was merely broken. Held rather than shown once, because it
+              // stays true for the session.
+              if (e.nativeEvent.code === 'compositing_unavailable')
+                setDepthInputs({ ok: false, reason: e.nativeEvent.message });
+              if (e.nativeEvent.code === 'compositing_inputs') setDepthInputs({ ok: true, reason: '' });
               if (e.nativeEvent.code === 'observing') {
                 setRoomCoverage({
                   walls: e.nativeEvent.wallCount ?? 0,
@@ -335,6 +345,7 @@ export default function Home() {
           spatialOwner={spatialOwner}
           onSaveCapture={lastCapture.current ? saveCapture : undefined}
           reconstruction={recon}
+          depthInputs={depthInputs}
           onExit={end}
         />
       )}

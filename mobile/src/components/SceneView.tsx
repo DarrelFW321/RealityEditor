@@ -1,5 +1,6 @@
 import { useMemo, useRef, type MutableRefObject } from 'react';
 import { Canvas, useFrame, type ThreeEvent } from '@react-three/fiber/native';
+import { useCallback, useState } from 'react';
 import { Shape, Matrix4, Vector2 } from 'three';
 import { roomFromWorld } from '../adapters/room-space';
 import { ShellView } from './ShellView';
@@ -8,6 +9,13 @@ import { parts, type EngineSnapshot } from '@reality/spatial-engine';
 import type { Vec3 } from '@reality/contracts';
 import type { TrackedFrame } from '../adapters/roomplan';
 import { NativeFrameDiagnostic, type FrameDiagnosticMode, type FrameDiagnosticSample } from './NativeFrameDiagnostic';
+import { CompositorView, type CompositorSample } from './CompositorView';
+import { PatchView } from './PatchView';
+import type { Patch } from '../runtime/patch';
+import type { PatchFill } from '../runtime/patches';
+import { textureBridgeAvailable } from '../adapters/frame-textures';
+import { shouldComposite, type ErasureVolume } from '@reality/spatial-engine';
+import type { Texture } from 'three';
 
 function CameraPose({
   frame,
@@ -61,6 +69,10 @@ export function SceneView({
   onRenderFps,
   frameDiagnostic = 'off',
   onFrameDiagnostic,
+  showShell = true,
+  patches,
+  erasure,
+  onCompositor,
 }: {
   snapshot: EngineSnapshot;
   selectedId: string | null;
@@ -76,8 +88,41 @@ export function SceneView({
   onRenderFps?: (fps: number) => void;
   frameDiagnostic?: FrameDiagnosticMode;
   onFrameDiagnostic?: (sample: FrameDiagnosticSample) => void;
+  /** M8-C live erasure. Absent, empty, or without a shell means it does not run and
+   * this component behaves exactly as it did before. */
+  /** Draw the shell as the "Show empty room" comparison. Independent of erasure. */
+  showShell?: boolean;
+  /** Wall patches, registered in room space. Drawn as ordinary geometry. */
+  patches?: { patch: Patch; uri: string; fill: PatchFill }[];
+  erasure?: { volumes: ErasureVolume[]; retained: ErasureVolume[] } | null;
+  onCompositor?: (sample: CompositorSample) => void;
 }) {
   const scene = snapshot.previewScene ?? snapshot.scene;
+  // Every condition must hold. Erasure is opt-in at every level: no live frame, no
+  // shell, no volumes or a diagnostic view showing means the ordinary path renders.
+  const [atlas, setAtlasState] = useState<Texture | null>(null);
+  // Stable identity: ShellView reports on every texture change, and an inline setter
+  // would make that effect re-run every render.
+  const setAtlas = useCallback((texture: Texture | null) => setAtlasState(texture), []);
+  /**
+   * Gated on a live frame and something to erase, and NOTHING ELSE.
+   *
+   * This previously also required a shell, which is only ever non-null once a
+   * reconstruction has completed — so the compositor never mounted, the shader never
+   * ran, and "hide it" changed state without changing a pixel. The shell is an
+   * improvement to the fill, not a precondition for it: without one the shader fills
+   * from the camera pixels surrounding the region.
+   */
+  const [bridgeFailed, setBridgeFailed] = useState(false);
+  const compositing = shouldComposite({
+    hasCameraFrame: !!frame,
+    diagnosticActive: frameDiagnostic !== 'off',
+    // The compositor owns the whole draw while mounted. Without a working native
+    // texture bridge it has no camera pixels, so mounting it would replace a working
+    // editor with an empty one.
+    bridgeUsable: textureBridgeAvailable() && !bridgeFailed,
+    erasing: erasure?.volumes.length ?? 0,
+  });
   const floor = scene.design.surfaces.find((s) => s.class === 'floor');
   const shape = useMemo(
     () => new Shape(scene.design.bounds.floor_polygon.map((p) => new Vector2(p[0]!, -p[1]!))),
@@ -96,7 +141,20 @@ export function SceneView({
         gl.setClearColor('#0c1420', frame ? 0 : 1);
       }}
     >
-      {frame && frameDiagnostic === 'off' && <CameraPose frame={frame} origin={origin} />}
+      {/* The compositor drives the camera pose itself, from the same frame bundle as
+          the pixels it draws, so the two must never both run. */}
+      {frame && frameDiagnostic === 'off' && !compositing && <CameraPose frame={frame} origin={origin} />}
+      {compositing && erasure && (
+        <CompositorView
+          frameId={snapshot.scene.frameId}
+          shell={shell ?? null}
+          atlas={atlas}
+          volumes={erasure.volumes}
+          retained={erasure.retained}
+          onSample={onCompositor}
+          onUnavailable={() => setBridgeFailed(true)}
+        />
+      )}
       {frame && frameDiagnostic !== 'off' && onFrameDiagnostic && (
         <NativeFrameDiagnostic frameId={snapshot.scene.frameId} mode={frameDiagnostic} onSample={onFrameDiagnostic} />
       )}
@@ -146,6 +204,23 @@ export function SceneView({
         .map((object) => {
           const preview = snapshot.preview?.targetId === object.id ? snapshot.preview.pose : null;
           const pose = preview ?? object.pose;
+          /**
+           * A REAL object is already on screen — the camera is showing it. Painting a
+           * box over it hides the thing the user is looking at behind a grey
+           * approximation of itself, which reads as the app having masked their
+           * furnace rather than having recognised it.
+           *
+           * So in AR a measured object is drawn only when it needs to be: while it is
+           * being carried, or while it is selected, and then faintly. It stays fully
+           * pickable either way, because an invisible mesh still receives pointer
+           * events, and it remains an obstacle in the index regardless of rendering.
+           *
+           * With no camera (the development room) there is nothing else to look at, so
+           * everything is drawn exactly as before.
+           */
+          const measured = !!frame && object.provenance !== 'virtual';
+          const highlighted = !!preview || selectedId === object.id;
+          const ghosted = measured && !highlighted;
           return (
             <group
               key={object.id}
@@ -170,17 +245,50 @@ export function SceneView({
                           ? '#214d77'
                           : '#000000'
                     }
-                    transparent={!!preview}
-                    opacity={preview ? 0.65 : 1}
+                    transparent={ghosted || !!preview}
+                    // Not `visible={false}`: an outline of what is selected has to
+                    // survive, and a fully hidden mesh cannot show a carry preview.
+                    opacity={ghosted ? 0 : measured ? 0.35 : preview ? 0.65 : 1}
+                    depthWrite={!ghosted}
                   />
                 </mesh>
               ))}
             </group>
           );
         })}
+      {/* Hand-drawn erasure boxes. Shown as an outline so the user can see WHAT they
+          are masking and aim the next one; the erasure itself happens in the
+          compositor, which does not care whether this is drawn. `center` is the BASE
+          centre, matching every other volume in the engine, so the mesh is lifted by
+          half its height to sit on the floor the user pointed at. */}
+      {scene.maskVolumes
+        // Once hidden, the compositor is painting that region; drawing the outline on
+        // top would put a cyan box over the fill that just replaced it.
+        .filter((volume) => !volume.hidden || selectedId === volume.id)
+        .map((volume) => (
+        <mesh
+          key={volume.id}
+          position={[volume.center[0], volume.center[1] + volume.size[1] / 2, volume.center[2]]}
+          rotation={[0, volume.yaw, 0]}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            onSelect(volume.id);
+          }}
+        >
+          <boxGeometry args={volume.size as Vec3} />
+          <meshStandardMaterial
+            color={volume.hidden ? '#f0b429' : selectedId === volume.id ? '#f0b429' : '#4fd1c5'}
+            transparent
+            opacity={volume.hidden ? 0.12 : selectedId === volume.id ? 0.3 : 0.16}
+            depthWrite={false}
+            wireframe={volume.hidden || selectedId !== volume.id}
+          />
+        </mesh>
+      ))}
       {/* Drawn before the helpers and after the room so it sits behind editable content.
           Renders nothing at all when no shell has been reconstructed. */}
-      {shell && <ShellView shell={shell} atlasUri={atlasUri ?? null} />}
+      {patches && patches.length > 0 && <PatchView patches={patches} />}
+      {shell && <ShellView shell={shell} atlasUri={atlasUri ?? null} visible={showShell} onAtlas={setAtlas} />}
       {!frame && <gridHelper args={[8, 16, '#677d92', '#334254']} />}
       {diagnostics && (
         <group>

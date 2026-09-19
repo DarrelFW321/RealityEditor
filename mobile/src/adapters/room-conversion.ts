@@ -364,6 +364,7 @@ export function roomToSession(
     removedPhysicalIds: [],
     removalMaskIds: [],
     removalMaskCalibration: null,
+    maskVolumes: [],
     /** M7 groups start empty: a scan produces measured furniture, never a design group. */
     groups: {},
   };

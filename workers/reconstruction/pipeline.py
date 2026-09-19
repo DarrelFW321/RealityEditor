@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
+from appearance import enabled as appearance_enabled, provider_from_env, refine
 from complete import complete
 from project import coverage, project_surfaces
 from segment import segment
@@ -37,7 +38,19 @@ def reconstruct(request: dict, dump: Path | None = None) -> Result:
 
     masks = segment(room, keyframes, origin, sam_weights)
     atlases = project_surfaces(room, keyframes, masks.per_frame, origin)
-    filled, method = complete(atlases, lama_weights)
+    filled, method, inpainting = complete(atlases, lama_weights)
+
+    # M8.5: an OPTIONAL fourth stage. Off unless APPEARANCE_PROVIDER names one, and it
+    # can only repaint texels `complete` already marked as never observed. The baseline
+    # result above stays the fallback and is returned unchanged on any failure, so this
+    # cannot make the worker worse than it is without it.
+    appearance = None
+    if appearance_enabled():
+        provider = provider_from_env()
+        filled, appearance = refine(room, atlases, filled, provider, seed=int(os.environ.get("APPEARANCE_SEED", "0")))
+        if appearance.applied:
+            method = f"{method}+{appearance.provider}"
+
     image, placed = pack(atlases, filled)
     document = shell_document(atlases, placed, (image.shape[1], image.shape[0]), method)
 
@@ -81,6 +94,48 @@ def reconstruct(request: dict, dump: Path | None = None) -> Result:
             "modelPixels": masks.model_pixels,
             "completion": method,
             "coverage": coverage(atlases),
+            # Present only when the masked filler ran, so its absence is unambiguous.
+            **(
+                {
+                    "inpainting": {
+                        "provider": inpainting.provider,
+                        "model": inpainting.model,
+                        "applied": inpainting.applied,
+                        "reason": inpainting.reason,
+                        "holes": inpainting.holes,
+                        "filled": inpainting.filled,
+                        "tilesRequested": inpainting.tiles_requested,
+                        "tilesApplied": inpainting.tiles_applied,
+                        "observedPreserved": inpainting.observed_preserved,
+                        "billedCalls": inpainting.billed_calls,
+                        "notes": inpainting.notes,
+                    }
+                }
+                if inpainting is not None
+                else {}
+            ),
+            # Present only when the optional stage ran, so its absence is unambiguous
+            # rather than a row of zeroes that could mean "off" or "filled nothing".
+            **(
+                {
+                    "appearance": {
+                        "provider": appearance.provider,
+                        "model": appearance.model,
+                        "seed": appearance.seed,
+                        "applied": appearance.applied,
+                        "reason": appearance.reason,
+                        "holes": appearance.holes,
+                        "filled": appearance.filled,
+                        "leftOnBaseline": appearance.left_on_baseline,
+                        "coverage": appearance.coverage,
+                        "observedPreserved": appearance.observed_preserved,
+                        "perSurface": appearance.per_surface,
+                        "billedCredits": appearance.billed_credits,
+                    }
+                }
+                if appearance is not None
+                else {}
+            ),
         },
     )
 

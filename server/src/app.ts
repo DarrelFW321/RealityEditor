@@ -4,6 +4,7 @@ import type { CalibrationStore } from './reconstruction/store.js';
 import { config } from './config.js';
 import { registerSessionRoute } from './routes/session.js';
 import { registerPlanStyleRoute } from './routes/plan_style.js';
+import { registerInpaintRoute } from './routes/inpaint.js';
 
 /**
  * Builds the app without binding a port.
@@ -55,6 +56,7 @@ export async function buildApp(
 
   await registerSessionRoute(app);
   await registerPlanStyleRoute(app);
+  await registerInpaintRoute(app);
   await registerCalibrationRoutes(app, store);
   return app;
 }

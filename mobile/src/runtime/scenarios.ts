@@ -17,7 +17,7 @@ import {
 import { buildObject } from '@reality/scene-recipes';
 import { SceneRecipeSchema, ShellSchema } from '@reality/contracts';
 import { expandLegacyPlan } from './legacy-style';
-import { recipeTool, voiceTool } from './editor';
+import { recipeTool, voiceTool, VOICE_INSTRUCTIONS } from './editor';
 import { roomToSession } from '../adapters/room-conversion';
 import { applyToPoint, roomFromWorld } from '../adapters/room-space';
 import type { EditorState, EditResult, InteractionContext, Vec3 } from '@reality/contracts';
@@ -73,7 +73,9 @@ export type Scenario = {
     | 'construction'
     | 'budget'
     | 'palette'
-    | 'legacy';
+    | 'legacy'
+    // M8
+    | 'erasure';
   scene: () => EditorState;
   run: (editor: Editor) => Promise<StepResult[]>;
 };
@@ -88,6 +90,7 @@ function context(editor: Editor, destination: InteractionContext['destination'],
     frameId: scene.frameId,
     selectedId,
     destination,
+    viewer: null,
   };
 }
 
@@ -705,7 +708,7 @@ export const scenarios: Scenario[] = [
       try {
         const added = await room.intent(
           { action: 'add', family: 'table' },
-          { turnId: 'scenario', clock: 'epoch', timestamp: Date.now(), revision: scene.revision, frameId: scene.frameId, selectedId: null, destination: null },
+          { turnId: 'scenario', clock: 'epoch', timestamp: Date.now(), revision: scene.revision, frameId: scene.frameId, selectedId: null, destination: null, viewer: null },
         );
         steps.push(check('adding with no pointed destination works', added.status === 'applied', describe(added)));
         steps.push(check('the object is inside the room', room.engine.getSnapshot().scene.design.objects.length === 1, `${room.engine.getSnapshot().scene.design.objects.length} objects`));
@@ -1288,6 +1291,27 @@ export const scenarios: Scenario[] = [
       steps.push(check('a relative change resolves from the current size', wider.status === 'applied' && Math.abs((dims()[0] ?? 0) - 1.6) < 1e-6, dims().join(' x ')));
       const silent = await editor.intent({ action: 'resize', target_id: id }, context(editor, null));
       steps.push(check('no size at all asks rather than guesses', silent.status === 'rejected' && /how wide/i.test(silent.message), silent.message));
+
+      // Asked to erase something, the model reported it lacked a "project ID" — a
+      // concept that exists nowhere here. It had no vocabulary for erasing, so it
+      // invented a prerequisite. Both halves of that are checked.
+      const action = (properties.action as { description?: string }).description ?? '';
+      steps.push(check('the action list explains how to erase', /hide/.test(action) && /delete/i.test(action) && /mask/i.test(action), action ? `${action.split('\n').length} lines` : 'NO DESCRIPTION'));
+      steps.push(check('hide is distinguished from remove', /remove —/.test(action) && /physical|carried out/i.test(action), 'both described'));
+
+      // "mask" and "delete" are the user's own words for two different things, and the
+      // description previously told the model to route BOTH to `hide` — so asking to
+      // mask something produced an object erase, not the box they meant.
+      const maskLine = action.slice(action.indexOf('mask_area'), action.indexOf('unmask_area'));
+      const hideLine = action.slice(action.indexOf('hide —'), action.indexOf('remove —'));
+      steps.push(check('"mask" routes to the box, not to hide', /"MASK"/.test(maskLine) && !/"mask"/i.test(hideLine), hideLine.includes('mask') ? 'hide still claims mask' : 'separated'));
+      steps.push(check('"delete" routes to hide', /"DELETE"/.test(hideLine), hideLine.split('\n')[0] ?? ''));
+      steps.push(check('the two are called out as different', /never substitute one for the other/i.test(action), 'stated in the schema'));
+      steps.push(check('and again in the instructions', /TWO DIFFERENT WORDS, TWO DIFFERENT ACTIONS/.test(VOICE_INSTRUCTIONS) && /"MASK" always means action "mask_area"/.test(VOICE_INSTRUCTIONS), 'stated'));
+      steps.push(check('masking with nothing identified is allowed', /never needs a target|even when nothing has/i.test(VOICE_INSTRUCTIONS), 'stated'));
+      steps.push(check('the model is told hide needs no id for a mask box', /Never report a missing target id for a\s*\n?\s*mask box/.test(VOICE_INSTRUCTIONS) && /mask_areas/.test(VOICE_INSTRUCTIONS), 'stated'));
+      steps.push(check('the model is told not to invent prerequisites', /NEVER INVENT A MISSING PREREQUISITE/.test(VOICE_INSTRUCTIONS) && /no projects/i.test(VOICE_INSTRUCTIONS), 'stated'));
+      steps.push(check('both erase paths are named in the instructions', /action "mask_area"/.test(VOICE_INSTRUCTIONS) && /action "hide"/.test(VOICE_INSTRUCTIONS) && /action\n?\s*"remove"/.test(VOICE_INSTRUCTIONS), 'mask_area, hide and remove all named'));
       return steps;
     },
   },
@@ -1689,6 +1713,46 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    id: 'hide-real-object',
+    title: 'Hiding a real object needs no new furniture',
+    milestone: 'M7',
+    gate: 'transaction',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      // "hide the bed" creates nothing. The recipe required at least one item, so this
+      // was previously impossible to express at all: the only way to hide something was
+      // to also build something, which is not what anyone means.
+      const hidden = await editor.intent({ action: 'hide', target_id: 'obj_bed_01' }, context(editor, null));
+      const scene = editor.engine.getSnapshot().scene;
+      steps.push(check('a hide-only request commits', hidden.status === 'applied', describe(hidden)));
+      steps.push(check('it explains what will happen on screen', /reconstructed wall behind it/i.test(hidden.message), hidden.message));
+      steps.push(check('and that the real object is still there', /still physically there/i.test(hidden.message), 'dependency stated'));
+      steps.push(check('nothing was built', !scene.design.objects.some((o) => o.provenance === 'virtual'), `${scene.design.objects.length} objects`));
+      steps.push(check('erasure intent is recorded', scene.removalMaskIds.includes('obj_bed_01'), scene.removalMaskIds.join(',')));
+      steps.push(check('it is not a physical removal', !scene.removedPhysicalIds.includes('obj_bed_01'), 'still a physical obstacle'));
+
+      // Hidden is not gone. The bed's own spot must still refuse a placement, or
+      // "erase it from view" would quietly have become "carry it out of the room".
+      const onTheBed = await editor.intent(
+        { action: 'add', family: 'table' },
+        context(editor, onFloor(editor, [-0.9, 0, -0.9])),
+      );
+      steps.push(check('the hidden object still blocks its own space', onTheBed.status === 'rejected', describe(onTheBed)));
+
+      // Hiding a virtual object is `remove`; there is no measured appearance to erase.
+      const built = await editor.intent({ action: 'add', family: 'table' }, context(editor, onFloor(editor, [-1, 0, 1.2])));
+      const virtualId = editor.engine.getSnapshot().scene.design.objects.find((o) => o.provenance === 'virtual')?.id;
+      steps.push(check('a clear spot still accepts furniture', built.status === 'applied' && !!virtualId, describe(built)));
+      const refused = await editor.intent({ action: 'hide', target_id: virtualId }, context(editor, null));
+      steps.push(check('a virtual object cannot be hidden', refused.status === 'rejected' && refused.refusal === 'unknown_target', describe(refused)));
+
+      const undone = await editor.intent({ action: 'undo' }, context(editor, null));
+      steps.push(check('undo is available', undone.status === 'applied', describe(undone)));
+      return steps;
+    },
+  },
+  {
     id: 'legacy-style-expansion',
     title: 'A legacy style plan expands into the same validated transaction',
     milestone: 'M7',
@@ -1706,7 +1770,8 @@ export const scenarios: Scenario[] = [
           { type: 'ADD_OBJECT', target_id: 'obj_new_2', catalog_id: 'cat_chandelier', relation: 'centered_in' },
         ],
       });
-      steps.push(check('the supported ops became recipe items', expansion.recipe.items.length === 1 && expansion.recipe.items[0]!.family === 'cabinet', expansion.recipe.items.map((i) => i.family).join(',')));
+      const expanded = expansion.recipe.items ?? [];
+      steps.push(check('the supported ops became recipe items', expanded.length === 1 && expanded[0]!.family === 'cabinet', expanded.map((i) => i.family).join(',')));
       steps.push(check('the wall colour became a palette', expansion.recipe.wall_color === '#c8b8a0', expansion.recipe.wall_color ?? 'none'));
       steps.push(check('unsupported families are reported, not approximated', expansion.skipped.some((s) => s.op.catalog_id === 'cat_chandelier' && /no authored template/.test(s.reason)), expansion.skipped.map((s) => s.reason).join(' | ')));
       steps.push(check('a legacy material ref is not read as a structural class', expansion.skipped.some((s) => s.op.type === 'CHANGE_MATERIAL'), 'skipped'));

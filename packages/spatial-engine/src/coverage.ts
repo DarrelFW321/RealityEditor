@@ -255,6 +255,27 @@ export function reconstructionRoom(scene: EditorState, origin: Vec3): Reconstruc
     }))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
+  // Openings travel with the surfaces they are cut into. A window is not a wall the
+  // worker can project onto, and it is not empty space it may invent a view through
+  // either — it is a region whose depth is unknown, and saying so requires sending it.
+  const walls = new Set(surfaces.filter((s) => s.class === 'wall').map((s) => s.id));
+  const openings = scene.design.surfaces
+    .filter(
+      (s) =>
+        (s.class === 'window' || s.class === 'door' || s.class === 'opening') &&
+        s.state === 'present' &&
+        s.polygon.length >= 3 &&
+        !!s.parent &&
+        walls.has(s.parent),
+    )
+    .map((s) => ({
+      id: s.id,
+      class: s.class as 'window' | 'door' | 'opening',
+      parent: s.parent!,
+      polygon: s.polygon.map((p) => [p[0]!, p[1]!, p[2]!] as Vec3),
+    }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
   const obstacles = scene.measured.objects
     .filter((o) => o.state === 'present')
     .map((o) => ({
@@ -265,5 +286,5 @@ export function reconstructionRoom(scene: EditorState, origin: Vec3): Reconstruc
     }))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
-  return { origin, surfaces, obstacles };
+  return { origin, surfaces, openings, obstacles };
 }

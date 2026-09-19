@@ -44,7 +44,42 @@ export const IntentSchema = z
       // new content, which is what stops "make it three" becoming three new frames.
       'group_edit',
       'paint',
-    ]),
+      // Stop SHOWING a real object, without claiming it has been carried out of the
+      // room. `remove` means the physical thing is gone and stops being an obstacle;
+      // this means the user no longer wants to see it and it still is one.
+      'hide',
+      // Draw an erasure box by hand, for anything the scan never recognised.
+      'mask_area',
+      'unmask_area',
+    ])
+      .describe(
+        [
+          'What to do. Pick one. MASK and DELETE are different words here and the',
+          'user means different things by them — never substitute one for the other.',
+          '',
+          'mask_area — THE WORD "MASK". Always. Places a BOX the user can see, size',
+          '  and move, which hides everything inside it. Use it whenever they say',
+          '  "mask", "mask that", "mask this area", "make me a block", "create an',
+          '  object here" — whether or not anything was identified, and even if a',
+          '  real object is there. Size it with width_m/height_m/depth_m; leaving',
+          '  those out gives a default box. It needs no target: if nothing is pointed',
+          '  at, it appears in front of the user.',
+          'unmask_area — remove a mask box. The word "unmask".',
+          '',
+          'hide — THE WORD "DELETE". Use for "delete", "remove it", "get rid of",',
+          '  "make it disappear" when the target is REAL furniture from the scan.',
+          '  The physical object stays put; its pixels are replaced with the',
+          '  reconstructed wall behind it.',
+          'remove — "delete" for a VIRTUAL object you added, or to record that a real',
+          '  one has actually been carried out of the room so it stops blocking',
+          '  placements.',
+          'move, rotate, resize, color, material — edit one object.',
+          'paint — recolour a wall, floor, group, or the whole room palette.',
+          'group_edit — change the count, size, spacing or colour of a group you made.',
+          'add — place one new virtual object. structure — move a wall or opening.',
+          'select, cancel, undo, confirm — interaction control.',
+        ].join('\n'),
+      ),
     target_id: z.string().optional(),
     color: z
       .string()
@@ -126,8 +161,8 @@ export const RecipeIntentSchema = z
           })
           .strict(),
       )
-      .min(1)
-      .max(6),
+      .max(6)
+      .optional(),
     wall_color: z.string().regex(/^#[\da-f]{6}$/i).optional(),
     floor_color: z.string().regex(/^#[\da-f]{6}$/i).optional(),
     object_color: z.string().regex(/^#[\da-f]{6}$/i).optional(),
@@ -138,9 +173,65 @@ export const RecipeIntentSchema = z
     /** Measured objects to stop showing. Visibility intent only; they stay obstacles. */
     hide_ids: z.array(z.string()).max(64).optional(),
   })
-  .strict();
+  .strict()
+  // Empty items are fine; an empty REQUEST is not. Without this a call with nothing in
+  // it would plan an empty layout and report success at having done nothing.
+  .refine(
+    (r) =>
+      (r.items?.length ?? 0) > 0 ||
+      (r.hide_ids?.length ?? 0) > 0 ||
+      (r.replace_ids?.length ?? 0) > 0 ||
+      !!(r.wall_color || r.floor_color || r.object_color),
+    { message: 'a restyle must add, hide, replace or repaint something' },
+  );
 export type RecipeIntent = z.infer<typeof RecipeIntentSchema>;
 
+/**
+ * What the model is told it can do.
+ *
+ * Lives here rather than in the voice adapter because that module imports
+ * react-native-webrtc, which the headless gate cannot load. Exported so the gate can
+ * assert on it. The 'never invent a prerequisite' paragraph
+ * is not boilerplate: asked to erase something, the model reported that it lacked a
+ * "project ID" — a concept that exists nowhere in this system — because nothing in
+ * its vocabulary matched the request, so it filled the gap itself.
+ */
+export const VOICE_INSTRUCTIONS = [
+  'You control a spatial editor. Use edit_room for single changes and',
+  'restyle_room for a whole arrangement.',
+  '',
+  'TWO DIFFERENT WORDS, TWO DIFFERENT ACTIONS. Do not treat them as synonyms.',
+  '',
+  '  "MASK" always means action "mask_area". It puts a visible box in the',
+  '  room that hides whatever is inside it. Use it even when an object HAS',
+  '  been identified, and even when nothing has — it never needs a target,',
+  '  and it is how the user builds a shape over something the scan missed.',
+  '  Once placed they will adjust it: "wider", "taller", "bigger", or point',
+  '  and say "move it there". Those are resize and move on that same box.',
+  '  Then "hide it" replaces the pixels. The box id comes back in the tool',
+  '  result and is listed in mask_areas; you may also omit target_id and the',
+  '  most recent unhidden box is used. Never report a missing target id for a',
+  '  mask box — ask which one only if there are several.',
+  '',
+  '  "DELETE" means action "hide" for real scanned furniture, or action',
+  '  "remove" for a virtual object you added. It acts on a known object.',
+  '',
+  'If they say mask and you cannot identify anything, that is not a problem:',
+  'place the box anyway and tell them they can resize or move it.',
+  '',
+  'NEVER INVENT A MISSING PREREQUISITE. There are no projects, accounts,',
+  'sessions, permissions or setup steps in this system. If you cannot act,',
+  'the only honest reasons are: you do not know which object is meant, or a',
+  'tool returned a refusal. Say which of the two it is. Do not describe',
+  'anything you were not told by a tool result.',
+  '',
+  'Use supplied interaction_context and spatial_context; never guess',
+  'coordinates or targets. Report the tool result faithfully, including any',
+  'adjustment or caveat. Unknown structural support means it is not',
+  'verified. For a follow-up to something you created, call edit_room with',
+  'action "group_edit" and the group id, so the same objects change rather',
+  'than new ones appearing.',
+].join('\n');
 export const voiceTool = {
   type: 'function',
   name: 'edit_room',
@@ -224,6 +315,42 @@ export function toolSchema(schema: z.ZodType): Record<string, unknown> {
     return out;
   };
   return clean(z.toJSONSchema(schema)) as Record<string, unknown>;
+}
+
+/**
+ * Where a hand-drawn mask box should go.
+ *
+ * Three sources, in order: the box being adjusted stays put, a pointed destination
+ * wins next, and failing both the box is placed on the floor a short way in front of
+ * the viewer. That last fallback is the point of the feature — the user reaches for it
+ * precisely BECAUSE nothing was identified, so refusing for want of a target would
+ * refuse in exactly the situation it exists to serve.
+ */
+export function maskCentre(
+  state: EditorState,
+  context: InteractionContext,
+  existing?: { center: readonly number[] },
+): Vec3 | null {
+  if (existing) return [existing.center[0]!, existing.center[1]!, existing.center[2]!];
+  if (context.destination) return [...context.destination.position] as Vec3;
+  const viewer = context.viewer;
+  if (!viewer) return null;
+  const forward = [viewer.forward[0], 0, viewer.forward[2]];
+  const length = Math.hypot(forward[0]!, forward[2]!);
+  // Looking straight up or down gives no usable heading; fall back to the floor point
+  // under the viewer rather than projecting a box to infinity.
+  const ahead = length < 1e-3 ? [0, 0, 0] : [(forward[0]! / length) * 1.5, 0, (forward[2]! / length) * 1.5];
+  const floorY =
+    state.design.surfaces.find((s) => s.class === 'floor' && s.state === 'present')?.polygon[0]?.[1] ?? 0;
+  return [viewer.position[0] + ahead[0]!, floorY, viewer.position[2] + ahead[2]!];
+}
+
+/** Stable, collision-free, and readable in a diagnostic. */
+export function nextMaskId(state: EditorState): string {
+  for (let n = 1; ; n++) {
+    const candidate = `mask-${n}`;
+    if (!state.maskVolumes.some((v) => v.id === candidate)) return candidate;
+  }
 }
 
 export interface EditorModules {
@@ -452,6 +579,107 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
       return engine.confirm(engine.getSnapshot().pending?.operationId ?? id);
     }
 
+    if (command.action === 'hide') {
+      // "mask that" then "hide it" is the whole workflow, and the second half arrives
+      // with no id and often no selection. A box the user just placed and has not
+      // hidden yet is the only thing "it" can reasonably mean, so it is the fallback
+      // rather than a refusal about a target id they were never asked for.
+      const pendingBox = [...state.maskVolumes].reverse().find((v) => !v.hidden);
+      const wanted = command.target_id ?? context.selectedId ?? pendingBox?.id;
+      if (!wanted)
+        return rejected(
+          'Which one? Point at it, or say "mask that area" first and then hide it.',
+        );
+      // Hiding a MASK BOX is the second half of the mask workflow: the box has been
+      // placed and sized, and this is the step that actually replaces the pixels.
+      const box = state.maskVolumes.find((v) => v.id === wanted);
+      if (box) {
+        if (box.hidden) return rejected('That area is already hidden.');
+        const applied = await engine.execute(
+          { type: 'mask', ...box, center: box.center as Vec3, size: box.size as Vec3, hidden: true },
+          id,
+          context.revision,
+        );
+        if (applied.status === 'rejected') return applied;
+        return {
+          ...applied,
+          message:
+            'Hidden. Those pixels now take the colour of the wall and floor around them; say unmask to bring it back.',
+        };
+      }
+      // Measured identity only. Hiding a virtual object is `remove` — there is no real
+      // appearance to erase, so recording erasure intent for it would be meaningless.
+      const target = state.measured.objects.find((o) => o.id === wanted);
+      if (!target)
+        return rejected(
+          'I can only hide something the scan actually measured.',
+          'unknown_target',
+        );
+      const outcome = await restyle(
+        { label: `hide the ${target.refined_class ?? target.class}`, hide_ids: [wanted] },
+        context,
+        id,
+      );
+      if (outcome.status === 'rejected') return outcome;
+      // Intent is committed either way; whether it is VISIBLE depends on a
+      // reconstruction existing. Saying so is what stops a silent no-op being
+      // explained away by whoever is narrating it.
+      return {
+        ...outcome,
+        message: `Hiding the ${target.refined_class ?? target.class}. Its pixels are replaced with the reconstructed wall behind it once the room reconstruction is ready; the real object is still physically there.`,
+      };
+    }
+
+    if (command.action === 'mask_area') {
+      const existing = command.target_id
+        ? state.maskVolumes.find((v) => v.id === command.target_id)
+        : undefined;
+      const centre = maskCentre(state, context, existing);
+      if (!centre)
+        return rejected(
+          'I need somewhere to put it — point at it, or look at it and ask again.',
+        );
+      // Sized from the request, then from the box being adjusted, then a default that
+      // is roughly appliance-shaped, because that is what the scan tends to miss.
+      const base: Vec3 = (existing?.size as Vec3) ?? [0.8, 1.2, 0.8];
+      const size = (relativeDimensions(base, command) ?? base) as Vec3;
+      if (size.some((v) => v < 0.05 || v > 8))
+        return rejected(
+          `That would be ${size.map((v) => v.toFixed(2)).join(' x ')}m. I can mask between 5cm and 8m on a side.`,
+          'invalid_parameters',
+        );
+      const maskId = existing?.id ?? command.target_id ?? nextMaskId(state);
+      const result = await engine.execute(
+        {
+          type: 'mask',
+          id: maskId,
+          label: existing?.label ?? 'masked area',
+          // Anchored on the FLOOR at that spot, so the box stands on the ground and
+          // covers the thing there rather than being centred on the point itself.
+          center: [centre[0], centre[1], centre[2]] as Vec3,
+          size,
+          yaw: existing?.yaw ?? 0,
+          // A new box starts MARKED. Resizing one that is already hidden keeps it
+          // hidden, so adjusting a fill does not make the furniture reappear.
+          hidden: existing?.hidden ?? false,
+        },
+        id,
+        context.revision,
+      );
+      if (result.status === 'rejected') return result;
+      return {
+        ...result,
+        message: `${existing ? 'Resized' : 'Placed'} masked area "${maskId}", ${size[0].toFixed(2)} x ${size[1].toFixed(2)} x ${size[2].toFixed(2)}m. Say bigger, smaller, taller or wider to adjust it, point somewhere and say move it there, or say hide it to replace the pixels.`,
+        selectedId: maskId,
+      } as EditResult & { selectedId: string };
+    }
+
+    if (command.action === 'unmask_area') {
+      const maskId = command.target_id ?? state.maskVolumes[state.maskVolumes.length - 1]?.id;
+      if (!maskId) return rejected('There are no masked areas.', 'unknown_target');
+      return engine.execute({ type: 'unmask', targetId: maskId }, id, context.revision);
+    }
+
     if (command.action === 'paint') {
       const target = command.paint_target ?? 'object';
       if (target === 'room') {
@@ -636,6 +864,38 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
 
     const targetId = command.target_id ?? context.selectedId;
     if (!targetId) return rejected('Select an object first.');
+    // A mask volume is not in `design.objects`, so the hallucination guard below would
+    // refuse every edit to one. Resizing and moving a box the user drew has to work
+    // the same way as for anything else, so those are routed here first.
+    const maskTarget = state.maskVolumes.find((v) => v.id === targetId);
+    if (maskTarget) {
+      if (command.action === 'remove')
+        return engine.execute({ type: 'unmask', targetId }, id, context.revision);
+      if (command.action === 'resize' || command.action === 'move' || command.action === 'rotate') {
+        const size = (relativeDimensions(maskTarget.size as Vec3, command) ??
+          maskTarget.size) as Vec3;
+        const centre =
+          command.action === 'move'
+            ? (context.destination?.position as Vec3 | undefined) ?? (maskTarget.center as Vec3)
+            : (maskTarget.center as Vec3);
+        if (command.action === 'move' && !context.destination)
+          return rejected('Point at where it should go.');
+        if (size.some((v) => v < 0.05 || v > 8))
+          return rejected('I can mask between 5cm and 8m on a side.', 'invalid_parameters');
+        const yaw =
+          command.action === 'rotate' && command.yaw_degrees !== undefined
+            ? (command.yaw_degrees * Math.PI) / 180
+            : command.action === 'rotate' && command.yaw_delta_degrees !== undefined
+              ? maskTarget.yaw + (command.yaw_delta_degrees * Math.PI) / 180
+              : maskTarget.yaw;
+        return engine.execute(
+          { type: 'mask', id: targetId, label: maskTarget.label, center: centre, size, yaw, hidden: maskTarget.hidden },
+          id,
+          context.revision,
+        );
+      }
+      return rejected('A masked area can be moved, resized, rotated or removed.');
+    }
     // The hallucination guard: an invented id is refused here, not deep in a batch.
     if (!state.design.objects.some((o) => o.id === targetId && o.state === 'present'))
       return rejected('I cannot find that object in the room.', 'unknown_target');
@@ -726,13 +986,13 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
     // A hallucinated surface would otherwise become "the planner chose for you", which
     // is exactly the silent relocation the milestone forbids.
     const surfaces = new Set(state.design.surfaces.filter((s) => s.state === 'present').map((s) => s.id));
-    for (const item of wanted.items)
+    for (const item of wanted.items ?? [])
       if (item.surface_id && !surfaces.has(item.surface_id))
         return reject('I cannot find that surface in the room.', 'unknown_target');
 
     const recipe = SceneRecipeSchema.parse({
       label: wanted.label,
-      items: wanted.items.map((item) => ({
+      items: (wanted.items ?? []).map((item) => ({
         family: item.family,
         count: item.count,
         dimensions: item.dimensions ?? null,

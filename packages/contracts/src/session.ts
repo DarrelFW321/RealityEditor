@@ -249,6 +249,40 @@ export const EditorStateSchema = z.object({
     })
     .nullable()
     .default(null),
+  /**
+   * Hand-placed erasure boxes.
+   *
+   * Everything else erased is tied to something the scan recognised, which means
+   * anything RoomPlan did not box cannot be removed at all. A mask volume is just a
+   * region the user drew: no detection, no segmentation model, no object.
+   *
+   * Deliberately NOT a SceneObject. It has no assembly, takes part in no collision
+   * check and blocks no placement — it only says "do not show me what is in here".
+   * Living in committed state is what makes it undoable with everything else.
+   */
+  maskVolumes: z
+    .array(
+      z
+        .object({
+          id: z.string().min(1).max(80),
+          label: z.string().max(80).default('masked area'),
+          center: Vec3Schema,
+          size: Vec3Schema.refine((v) => v.every((n) => n >= 0.05 && n <= 8)),
+          yaw: z.number().finite().default(0),
+          /**
+           * False means MARKED: the box is drawn as an outline and the camera is
+           * untouched. True means HIDDEN: its pixels are replaced.
+           *
+           * Two steps on purpose. Placing a box and sizing it is a thing the user does
+           * while looking at what is inside it, and erasing on placement would remove
+           * the very thing they are aiming at.
+           */
+          hidden: z.boolean().default(false),
+        })
+        .strict(),
+    )
+    .max(16)
+    .default([]),
   /** M7 groups, keyed by group id. Defaulted so a pre-M7 state still parses. */
   groups: z.record(z.string(), GroupSchema).default({}),
 });
@@ -272,6 +306,19 @@ export const ContextSchema = z.object({
       kind: z.enum(['surface', 'object']).default('surface'),
     })
     .nullable(),
+  /**
+   * Where the user is and what they are looking at, room space.
+   *
+   * Needed for the one operation that must work when NOTHING has been identified:
+   * drawing an erasure box around something the scan never recognised. Every other
+   * action resolves against a surface or an object, and refusing for lack of one is
+   * correct; refusing to put a box in front of someone who is looking straight at the
+   * thing they want gone is not. Optional, so nothing else has to supply it.
+   */
+  viewer: z
+    .object({ position: Vec3Schema, forward: Vec3Schema })
+    .nullable()
+    .default(null),
 });
 export type InteractionContext = z.infer<typeof ContextSchema>;
 export const RecipeSchema = z
@@ -368,6 +415,19 @@ export const EditCommandSchema = z.discriminatedUnion('type', [
       affectedIds: z.array(z.string()).max(128),
     })
     .strict(),
+  /** Place or resize a hand-drawn erasure box. Same id twice replaces it. */
+  z
+    .object({
+      type: z.literal('mask'),
+      id: z.string().min(1).max(80),
+      label: z.string().max(80).default('masked area'),
+      center: Vec3Schema,
+      size: Vec3Schema.refine((v) => v.every((n) => n >= 0.05 && n <= 8)),
+      yaw: z.number().finite().default(0),
+      hidden: z.boolean().default(false),
+    })
+    .strict(),
+  z.object({ type: z.literal('unmask'), targetId: z.string() }).strict(),
   z.object({ type: z.literal('undo') }).strict(),
 ]);
 export type EditCommand = z.infer<typeof EditCommandSchema>;
@@ -455,6 +515,31 @@ export const ReconstructionRoomSchema = z
       )
       .min(1)
       .max(64),
+    /**
+     * Openings in those surfaces, room space, coplanar with their host wall.
+     *
+     * Added for M8.5 route A, which renders a depth panorama from the shell and must not
+     * fabricate an adjoining room behind a window. A ray through an opening is UNKNOWN
+     * depth, and that can only be represented if the worker knows the opening is there —
+     * without this it would close the hole with wall distance and invent geometry.
+     *
+     * Optional with a default, so a payload written before M8.5 still validates and the
+     * baseline pipeline is unaffected by its absence.
+     */
+    openings: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1).max(100),
+            class: z.enum(['window', 'door', 'opening']),
+            /** The wall this opening is cut into. */
+            parent: z.string().min(1).max(100),
+            polygon: z.array(Vec3Schema).min(3).max(64),
+          })
+          .strict(),
+      )
+      .max(64)
+      .default([]),
     /**
      * Measured furniture to reject from the background, as upright boxes in room space.
      * `center` is the base centre, matching the engine's `base_center` pivot.
@@ -584,7 +669,9 @@ export const SceneRecipeSchema = z
     recipeVersion: z.literal(1).default(1),
     /** The request in the user's terms, quoted back during narration. */
     label: z.string().min(1).max(80),
-    items: z.array(RecipeItemSchema).min(1).max(6),
+    /** May be EMPTY. Hiding, replacing or repainting are whole restyles that create
+     * nothing, and requiring an item made "hide the bed" impossible to express. */
+    items: z.array(RecipeItemSchema).max(6).default([]),
     palette: PaletteSchema.nullable().default(null),
     /** Objects that must survive the restyle and keep obstructing it. */
     preserveIds: z.array(z.string()).max(64).default([]),

@@ -5,6 +5,7 @@ import { Matrix4 } from 'three';
 import type { ExpoWebGLRenderingContext } from 'expo-gl';
 import { nativeTextureSource } from '../adapters/frame-textures';
 import { TextureFrameStream, type TextureFrame } from '../runtime/frame-textures';
+import { ensureContextCanvas } from '../runtime/gl-canvas';
 
 export type FrameDiagnosticMode = 'off' | 'camera' | 'depth' | 'confidence' | 'foreground';
 export type FrameDiagnosticSample = {
@@ -62,6 +63,8 @@ export function NativeFrameDiagnostic({ frameId, mode, onSample }: {
     const stream = streamRef.current;
     const frame = active.current ? stream?.read() ?? null : null;
     if (active.current) void stream?.poll();
+    // three's state reset reads `gl.canvas`, which expo-gl's context does not have.
+    ensureContextCanvas(gl);
     renderer.resetState();
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.clearColor(0, 0, 0, 0);
