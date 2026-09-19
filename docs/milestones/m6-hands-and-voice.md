@@ -1,6 +1,6 @@
 # M6 — Coordinated hands, touch, and voice
 
-Status: planned; implementation and acceptance remain open. Written 2026-09-19.
+Status: implemented locally; device acceptance remains open. Written 2026-09-19, implemented 2026-09-19.
 
 References: [shared milestone baseline](../implementation-plan-expo.md#remaining-milestone-plans--m6-through-m9), [product requirements](../prd-expo-migration.md), [implementation status](../expo-implementation-status.md).
 
@@ -130,30 +130,43 @@ Record speech-boundary, command, first-visible-edit, and settled-commit timing s
 
 ### Implementation
 
-- [ ] Selection and destination are independent and visibly identifiable.
-- [ ] Hands/touch and voice consume the same input coordinator.
-- [ ] Turn snapshots are immutable and response association is explicit.
-- [ ] Stale, ambiguous, duplicate, and cancelled commands behave deterministically.
-- [ ] Confirmation identifies the intended pending operation.
-- [ ] Every existing manual editing action has a voice equivalent.
-- [ ] Combined input produces one undoable manipulation transaction.
-- [ ] Occupancy, relations, and SCP reflect committed geometry.
-- [ ] Permission, tracking, interruption, and reconnect states are implemented.
+- [x] Selection and destination are independent and visibly identifiable.
+- [x] Hands/touch and voice consume the same input coordinator.
+- [x] Turn snapshots are immutable and response association is explicit.
+- [x] Stale, ambiguous, duplicate, and cancelled commands behave deterministically.
+- [x] Confirmation identifies the intended pending operation.
+- [x] Every existing manual editing action has a voice equivalent.
+- [x] Combined input produces one undoable manipulation transaction.
+- [x] Occupancy, relations, and SCP reflect committed geometry. The packet is built from
+      the committed grid, bounded to the schema's caps, and sent with the sealed context
+      at each turn boundary.
+- [x] Permission, tracking, interruption, and reconnect states are implemented and named
+      separately, each saying the room is unaffected.
 
 ### Verification and end-state evidence
 
-- [ ] Existing checks and the M6 development scenarios pass.
+- [x] Existing checks and the M6 development scenarios pass — app gate 33/33 (8 new M6
+      scenarios), server gate 9/9, worker self-test, workspace typecheck, iOS JS bundle.
 - [ ] Physical-device pointing, audio, and concurrent-input demonstrations pass.
-- [ ] Late callbacks cannot commit after cancellation or disposal.
-- [ ] Timing and lifecycle diagnostics are available without recording raw media.
-- [ ] Evidence below identifies the tested build and remaining limitations.
+- [x] Late callbacks cannot commit after cancellation or disposal (`input-lifecycle`).
+- [x] Turn/generation/target diagnostics emitted; no transcript or media is recorded.
+- [x] Limitations recorded below.
 
 ## Completion evidence record
 
-- Implementation commit: **not recorded**.
-- Local commands and scenario results: **not recorded**.
-- Device model, OS, native build, and lockfile hash: **not recorded**.
-- Active adapter IDs and voice configuration: **not recorded**.
+- Implementation commit: **pending commit** at time of writing; see the M6 section of
+  [implementation status](../expo-implementation-status.md).
+- Local commands and scenario results: `npm run typecheck` clean; `npm run gate` →
+  **33/33** app, **9/9** server, worker self-test PASS; `npx expo export --platform ios
+  --no-bytecode` succeeds.
+- Device model, OS, native build, and lockfile hash: **not recorded** — no device run.
+- Active adapter IDs and voice configuration: `openai-realtime-webrtc`; unchanged
+  `server_vad` with `create_response: false`, `interrupt_response: true`.
 - Device demonstration and sanitized diagnostics location: **not recorded**.
-- Measured timings, failures, and limitations: **not recorded**.
+- Measured timings, failures, and limitations: no live-model timings taken. SCP measures
+  **1170-1382 bytes** against the 2KB budget on the sample room. Limitations: hardware
+  acceptance for audio, fingertip alignment, delayed tools, combined input and
+  background/resume is outstanding; occlusion in `visible_entities` is inferred from the
+  crosshair ray rather than a depth buffer; `blocks` stays unemitted pending a
+  circulation model.
 - Acceptance date and reviewer: **not recorded**.

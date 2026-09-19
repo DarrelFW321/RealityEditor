@@ -26,7 +26,7 @@ Planning update, 2026-09-19: the project owner confirmed **M5 complete**. The re
 | M3 Carry/release | Implemented; gate scenarios pass locally | Device demonstration |
 | M4 Calibration | Implemented; gate scenarios pass locally against replayed captures | Device captures; non-LiDAR capture route; multiroom handling |
 | M5 Reconstruction | Complete per project-owner confirmation, 2026-09-19 | Accepted baseline for M6–M9; historical evidence below is retained |
-| [M6 Hands/voice](milestones/m6-hands-and-voice.md) | Integration written; detailed plan available | Input coordination, turn binding, derived scene data, interruption handling, and device acceptance |
+| [M6 Hands/voice](milestones/m6-hands-and-voice.md) | Implemented; 34/34 app gate including 9 M6 scenarios | Device acceptance: audio, fingertip alignment, delayed tools, combined input, background/resume |
 | [M7 Creation/restyle](milestones/m7-creation-and-restyling.md) | Procedural additions and basic edits implemented; detailed plan available | Whole-layout search, stable groups, construction validation, and atomic scene/visibility transactions |
 | [M8 Compositing](milestones/m8-live-compositing.md) | In progress: native texture feasibility spike and eight local scenarios implemented; [device handoff](m8-native-texture-feasibility.md) | Native compilation/device feasibility first, then selective erasure, transaction integration, foreground/depth acceptance, and sustained 30 FPS; not complete |
 | [M8.5 World-model evaluation](milestones/m8-5-world-model-evaluation.md) | Optional; desk research and plan documented, no provider experiments performed | After accepted M8: bounded appearance comparison, native/geometry/privacy gates, and adopt/defer/reject decision; baseline M9 remains available |
@@ -176,7 +176,8 @@ carried on `pending` from the release that parked it.
 - **Derived bearings are inferred, not measured.** A scan gives a bounding box and a category,
   never a load rating. The class list is deliberately short; omitting a surface costs a refusal,
   while a wrong inclusion would invent capacity the scan never observed.
-- **Relation and occupancy recomputation** remain deferred to M6, as in M2.
+- **Relation and occupancy recomputation** were deferred to M6 and are now implemented;
+  see the M6 section below.
 
 ### M3 evidence
 
@@ -659,6 +660,195 @@ evaluates with `ShellView` and the texture loader in it.
 **Not verified:** nothing has drawn a shell on a device. The geometry, the UVs and the
 contract are gated; that the texture actually uploads through EXGL on hardware is not, and
 that is the one thing this stage cannot prove off-device.
+
+## M6 coordinated hands, touch, and voice
+
+### One coordinator, not three sources of truth
+
+Selection, destination, turn binding and command execution lived in React effects: the hand
+loop wrote state through `setState`, the voice adapter read a mutable ref, and "which object
+was the user talking about" was whatever that ref held when a network callback happened to
+arrive. Fine until a tool call is delayed, at which point it silently acts on the wrong
+object.
+
+`mobile/src/runtime/coordinator.ts` owns all of it and is framework-independent, so the
+scenarios drive it with a scripted transport rather than a live model — which is what the
+milestone plan asks for, because event ordering is the thing under test and no provider
+makes that reproducible.
+
+### The correlation bug this milestone exists to fix
+
+`response.created` bound the response to `this.speechTurn` — whichever turn was *currently
+speaking*. Speak, pause, speak again, and a slow first response was recorded against the
+second turn, then acted on the second turn's selection. Responses now attach to the turn
+that **asked** for them, recorded before the request goes out.
+
+Alongside it: confirmations bind to a specific pending operation id, so a delayed "yes"
+cannot approve an edit the user has not seen; commands are serialised, because the engine is
+the only writer of committed state and is not reentrant; and a generation counter makes work
+from a previous voice connection identifiable as obsolete.
+
+### Ambiguity, defined twice before it was right
+
+The first rule fired whenever the selection had changed recently — which is the *normal*
+flow, point at a thing then talk about it — so it refused every command. The second fired
+whenever the live selection differed at resolve time, which is exactly the case latching
+exists to handle. The rule that survives is narrower: the selection did not hold **across**
+the utterance. Both wrong versions were caught by the gate.
+
+### Derived scene data
+
+`commit` blanked occupancy with the comment *"never hand a consumer a stale grid"*. Right
+instinct, wrong half — no consumer ever received a grid at all, and relations were carried
+from the fixture untouched, going stale the moment anything moved. Both are now rebuilt from
+committed geometry on every commit and undo: an 80x80 grid at the schema's fixed 5cm with run
+lengths summing exactly to the cell count, and relations derived from geometry and declared
+support. `blocks` stays unemitted, as M2 decided for `blocks_walkway`: it needs a circulation
+graph this project does not have.
+
+The engine now derives at construction too, so a fixture's hand-authored relations are not
+silently replaced by the first commit. That let `canon()` stop excluding occupancy, making
+the undo comparison strictly stronger.
+
+### The spatial context packet
+
+Built from the committed grid rather than recomputed: the schema rejects sending the grid
+itself at 10Hz, but a largest-open-rectangle scan over it is affordable. Candidates are
+ranked here — angular offset dominant, then distance, apparent size and intrinsic salience —
+because the schema is explicit that the client scores and the model only confirms. When the
+top two are within 0.1 the client has already concluded it is a tie and says so.
+
+**It agrees with the checked-in fixture.** The largest open rectangle computes as 4x2.2m at
+(0, 0.9), matching `contracts/fixtures/scp/pointing_at_bed.json`, which was generated
+independently by `tools/make_fixtures.py` in Python. Measured size is 1170-1382 bytes against
+the 2KB budget.
+
+### Four further bugs found by the exploration
+
+- `frameId` was initialised once at mount and never refreshed, so a re-measure without a
+  remount made every attention bind miss with `other_frame` and every intent fail as stale.
+- The destination re-latched itself every frame and never expired, which is precisely what
+  the two-second freshness rule exists to prevent.
+- The duplicate-call cache evicted at 100 entries and then re-executed; the engine caught the
+  double-commit but the original result was lost.
+- Every op recorded `source: 'system'` with a null turn, so the log could not distinguish a
+  voice edit from a tap. Ops are now attributed to their turn and source — never a
+  transcript, which the diagnostics rule forbids.
+
+### M6 evidence
+
+App gate **34/34**, including nine M6 scenarios covering the plan's acceptance table: delayed
+tool binding, stale and absent destinations, mid-utterance selection change, out-of-order
+responses, duplicate delivery, delayed confirmation against a newer pending edit, voice
+parity and shared carry transactions, derived occupancy and relations, the SCP, and
+obsolete-work rejection. Server gate 9/9, worker self-test passing, workspace typecheck
+clean, iOS JS bundle builds.
+
+**Not verified:** nothing has run on a device. Audio, fingertip alignment, delayed tools
+against a live model, concurrent input and background/resume are all outstanding, and the
+milestone's own checklist records them as such. Occlusion in `visible_entities` is inferred
+from the crosshair ray rather than a depth buffer.
+
+## M7 structured creation and atomic restyling
+
+"Make this a blue bedroom with three frames here" now produces a coherent, editable
+arrangement that fits the room. The conversational model contributes a **recipe** —
+families, counts and named surfaces — and never a coordinate; the device plans the poses,
+validates the whole result and commits it once.
+
+### The planner boundary
+
+`restyle_room` is a second tool alongside `edit_room`, so a "move that left" never has to
+carry a creation schema. What it accepts is a `SceneRecipe`: validated data, never
+executed. Poses come from `planLayout`, which is deterministic by construction — fixed
+candidate order, the same 5cm lattice the nudge search uses, identifiers derived from the
+scene rather than a clock, and no random source anywhere. Three runs of the same recipe
+against the same room produce byte-identical placements and byte-identical construction
+results, and the gate checks both.
+
+### Two claims that must not be confused
+
+A bounded search that runs out of budget has not proved anything. `search_exhausted` and
+`infeasible` are separate statuses with separate narration for that reason: the same
+four-bed request returns `search_exhausted` at a 40-evaluation budget ("a limit I hit, not
+a proof that they do not fit") and `infeasible` at the full 20 000, having actually
+established the conflict in 13 011 evaluations and 44ms. The 12-object cap reports as a
+bound too, never as geometry.
+
+### Evenly spaced, around a window
+
+The acceptance case is three frames on a wall that has a window in it, and "evenly spaced
+in usable wall space" turns out to need a definition. The opening cuts the wall into two
+1.2m runs; an odd-numbered group cannot be both evenly spaced across the whole wall and
+clear of the glass. The planner tries the runs unrolled into a single measure first, which
+gives perfect equal spacing and is rejected here because the middle frame would straddle
+the cut, then allocates by largest remainder across runs and spaces evenly within each.
+The answer is 2 + 1 at a 0.70m pitch, and no frame over the window.
+
+### Three legs
+
+A three-legged bed is not a bed with a leg deleted. `ENVELOPES` declares which support
+counts each family has authored geometry **and** edge-load checks for; `table` gained a
+genuine three-support template at version 1.1.0, `bed` did not. So a tripod table builds
+and carries its edge-load finding as a caveat, while a three-legged bed is refused with
+the reason and a supported alternative. Span limits carry a per-family bracing factor,
+because a bare 0.9m panel limit is right for a shelf and wrong for a bed frame with rails
+— the factor states the claim about bracing instead of burying it in the material number.
+
+### One transaction
+
+`applyProposal` prepares everything in an isolated draft — withdrawals, placements,
+palette, group membership, visibility intent — validates the complete arrangement, and
+publishes one commit. One revision, one op-log entry, one undo that restores objects,
+surfaces, groups and visibility intent together, because the history entry is a snapshot
+of the whole state.
+
+Only violations the transaction **creates** can refuse it. A scan can hand over a room
+whose measured furniture already overlaps slightly, and refusing a restyle for a condition
+it did not cause would make the feature unusable in exactly the rooms it is for; those are
+reported as caveats instead.
+
+### Visibility intent is not removal
+
+`hideMeasuredIds` drops an object from the **design** so it stops being drawn, and records
+it in `removalMaskIds` with the calibration it was expressed against. It never touches
+`removedPhysicalIds`. The measured observation stays, so the object stays in the index and
+the planner still routes around it — not seeing something is not the same as it being
+gone. A reconstruction manifest naming removed objects erases nothing on its own, and the
+gate proves it.
+
+### Bugs the gate found
+
+- **Re-planning a group collided with itself.** Growing two frames to three left the
+  original two in the draft at their old poses, so each reused member overlapped its own
+  previous position and the whole group silently relocated to another wall. Members of a
+  group being re-planned are now withdrawn from the draft first.
+- **Two spacing metrics.** One strategy reported the cell width and the other the
+  centre-to-centre distance, so a group's recorded pitch did not match the gap between
+  its own members.
+- **"Try 1 instead of 1."** The count alternative was offered even for a single object.
+- **The revalidator invented legs.** Deriving a nominal 3-or-4 reported every shelf and
+  frame as an unauthored four-support variant; the support count is read off the assembly,
+  which is the only reliable source.
+- **A destination deviation with no request behind it.** The wall-group planner compared
+  against the first wall in id order even when the recipe had named no wall at all.
+
+### M7 evidence
+
+App gate **47/47**, including thirteen M7 scenarios covering the plan's acceptance table:
+the blue-bedroom recipe, count 2→3→2 with retained identity, an impossible layout with no
+partial commit, preservation of a selected object as a visible obstacle, atomic undo of a
+furnished-room restyle, a wall moved into furniture, the three-legged bed, a stale
+proposal, the search limit, planning determinism, reconstruction-never-erases, and the
+legacy style expansion. Server gate 9/9, worker self-test passing, workspace typecheck
+clean, iOS JS bundle builds (4.5MB).
+
+**Not verified:** nothing has run on a device. The complete voice-driven bedroom,
+count-change and undo journey is outstanding. Known limits: a group hangs on one wall, so
+the planner refuses rather than distributing a group across several; floor groups are
+placed member-by-member by candidate search rather than solved for even spacing, so
+`evenly_spaced` is exact only for wall groups; the construction envelopes and bracing
+factors are authored estimates and every result says so.
 
 ## Worker integration
 

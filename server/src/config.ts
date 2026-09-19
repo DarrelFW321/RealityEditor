@@ -9,12 +9,27 @@ import "dotenv/config";
  * `curl /session` still tells you whether the process is alive and the route is
  * wired — which is the question you are actually asking at that point.
  */
+/**
+ * Reads a credential, treating an unedited `.env.example` placeholder as absent.
+ *
+ * `OPENAI_API_KEY=sk-proj-...` is a non-empty string, so the routes' `!key` guard
+ * waved it through and the placeholder itself was sent to OpenAI as a bearer token.
+ * OpenAI answered 401, the server turned that into a generic upstream error, and the
+ * phone rendered it as "configure the backend API key" — instructing the one person
+ * who had already edited the file to edit the file. A placeholder is not a
+ * credential; that is decided here, once, instead of being discovered as a 401.
+ */
+function credential(name: string) {
+  const raw = (process.env[name] ?? "").trim();
+  return raw.endsWith("...") ? "" : raw;
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 8787),
   host: process.env.HOST ?? "0.0.0.0",
 
-  openaiApiKey: process.env.OPENAI_API_KEY ?? "",
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
+  openaiApiKey: credential("OPENAI_API_KEY"),
+  anthropicApiKey: credential("ANTHROPIC_API_KEY"),
 
   /**
    * Verified against the GA Realtime docs. The preview interface used
@@ -22,7 +37,14 @@ export const config = {
    * anything older than that in a tutorial points at a deprecated path.
    */
   realtime: {
-    model: process.env.REALTIME_MODEL ?? "gpt-realtime-2.1",
+    /**
+     * The mini tier of the same generation: $10/$20 per 1M audio tokens against
+     * $32/$64 for plain `gpt-realtime-2.1`. This workload is short imperative
+     * commands resolved against a spatial context packet the client has ALREADY
+     * ranked — the model is not doing the geometry, so the larger tier buys
+     * nothing here. Override with REALTIME_MODEL if a session proves otherwise.
+     */
+    model: process.env.REALTIME_MODEL ?? "gpt-realtime-2.1-mini",
     clientSecretsURL: "https://api.openai.com/v1/realtime/client_secrets",
     /** The phone opens this with `Authorization: Bearer <ephemeral token>`. */
     wsURL: "wss://api.openai.com/v1/realtime",
@@ -35,7 +57,9 @@ export const config = {
    * animation covers it. Effort is held low for that reason, not to save money.
    */
   planner: {
-    model: "claude-opus-5",
+    /** Sonnet, not Opus: this emits at most 12 ops against a constrained schema
+     * that is re-validated server-side, and it is off the critical path. */
+    model: "claude-sonnet-5",
     maxOps: 12,
   },
 } as const;

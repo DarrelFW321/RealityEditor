@@ -126,7 +126,17 @@ export async function registerSessionRoute(app: FastifyInstance) {
       const text = await upstream.text();
       if (!upstream.ok) {
         request.log.error({ status: upstream.status }, 'client_secrets rejected');
-        return reply.code(502).send({ error: 'upstream_error', status: upstream.status });
+        // A rejected key and an overloaded service are different problems with
+        // different remedies, and both used to arrive at the phone as the single
+        // word `upstream_error` — which the client then rendered as "configure the
+        // backend API key" regardless. Name them so the device can say which it is.
+        const error =
+          upstream.status === 401 || upstream.status === 403
+            ? 'key_rejected'
+            : upstream.status === 429
+              ? 'rate_limited'
+              : 'upstream_error';
+        return reply.code(502).send({ error, status: upstream.status });
       }
 
       let payload: unknown;

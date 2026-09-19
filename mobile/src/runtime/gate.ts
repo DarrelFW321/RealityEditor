@@ -42,7 +42,7 @@ async function main() {
 
   // Same output twice is the only proof that a solver result was reasoned, not sampled.
   console.log('\nDeterminism');
-  for (const id of ['overlap', 'carry-adjust', 'calib-inferred']) {
+  for (const id of ['overlap', 'carry-adjust', 'calib-inferred', 'input-ordering', 'plan-deterministic']) {
     const scenario = selected.find((s) => s.id === id);
     if (!scenario) continue;
     const repeat = await checkDeterminism(scenario);
