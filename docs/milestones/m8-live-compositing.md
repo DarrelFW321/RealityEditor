@@ -1,6 +1,6 @@
 # M8 — Live compositing and foreground preservation
 
-Status: planned; native feasibility, implementation, and acceptance remain open. Written 2026-09-19.
+Status: in progress; M8-A native texture feasibility spike and diagnostic views implemented, native build/device gate unverified. Final compositing and milestone acceptance remain open. Updated 2026-09-19. See [implementation evidence and device handoff](../m8-native-texture-feasibility.md).
 
 References: [shared milestone baseline](../implementation-plan-expo.md#remaining-milestone-plans--m6-through-m9), [product requirements](../prd-expo-migration.md), [M7 scene transactions](m7-creation-and-restyling.md).
 
@@ -14,9 +14,11 @@ Dependencies: accepted M5 shell/atlas artifacts and calibration identity, M6 inp
 
 A reconstructed shell preview does not satisfy M8. If texture interoperability or foreground preservation fails its gate, M8 remains incomplete rather than being redefined as a shell-only feature.
 
+After acceptance, [optional milestone M8.5](m8-5-world-model-evaluation.md) evaluates world-model appearance completion against this baseline. It cannot replace an M8 gate. The implementation steps below use letters to distinguish them from that separate milestone.
+
 ## Starting state and implementation boundaries
 
-M5 supplies a registered textured shell. The current renderer displays it as 3D content but does not selectively replace camera pixels. The native bridge supplies tracking metadata and occasional JPEG keyframes, not synchronized live color/depth textures.
+M5 supplies a registered textured shell. The current renderer displays it as 3D content but does not selectively replace camera pixels. M8-A now adds an opt-in, bounded native color/depth/foreground texture bridge and same-frame development views. These are not yet compiled or validated on a physical device and do not implement selective erasure.
 
 Primary integration points are the [native capture module](../../mobile/modules/spatial-capture/ios/SpatialCaptureModule.swift), [capture adapter](../../mobile/src/adapters/roomplan.tsx), [scene renderer](../../mobile/src/components/SceneView.tsx), [shell renderer](../../mobile/src/components/ShellView.tsx), and [session contracts](../../packages/contracts/src/session.ts).
 
@@ -24,7 +26,7 @@ Retain R3F for editable rendering and the existing ARSession for capture. Keep l
 
 ## Ordered implementation plan
 
-### M8.1 — Pass the native texture feasibility gate
+### M8-A — Pass the native texture feasibility gate
 
 1. Add an Expo GL integration to the native capture adapter for camera color, depth/confidence, and foreground textures in the R3F GL context.
 2. Keep native buffers behind process-local handles. Expose frame sequence, capture time, projection, display transform, room anchor, coordinate-frame identity, and adapter generation alongside the handles.
@@ -43,7 +45,7 @@ Implementation evidence for this path: Expo exposes native GL object creation/ma
 
 Do not proceed to final compositing passes until this gate passes. A failure requires a revised native integration design; it does not authorize changing the selected renderer or weakening the product goal silently.
 
-### M8.2 — Enable depth and foreground inputs
+### M8-B — Enable depth and foreground inputs
 
 1. After measurement, check supported AR frame semantics before enabling scene depth and person segmentation for editing.
 2. Preserve world tracking and anchors when configuring the editing phase. Do not reset the coordinate frame without recalibration.
@@ -54,7 +56,7 @@ Do not proceed to final compositing passes until this gate passes. A failure req
 
 Deliverable: usable synchronized foreground/depth inputs with explicit unsupported and unavailable states.
 
-### M8.3 — Implement the compositing passes
+### M8-C — Implement the compositing passes
 
 1. Draw the synchronized camera image as the base layer.
 2. Render the reconstructed shell into color/depth targets.
@@ -68,7 +70,7 @@ Deliverable: usable synchronized foreground/depth inputs with explicit unsupport
 
 Deliverable: selective camera-pixel replacement and correct retained/erased/virtual depth behavior.
 
-### M8.4 — Connect visibility to scene transactions
+### M8-D — Connect visibility to scene transactions
 
 1. Support erasing the original measured appearance after a real object is moved, rotated, resized, replaced, or removed.
 2. Keep preview visibility transient and owned by the manipulation transaction.
@@ -79,7 +81,7 @@ Deliverable: selective camera-pixel replacement and correct retained/erased/virt
 
 Deliverable: renderer behavior consistent with M7 commit, rollback, and undo semantics.
 
-### M8.5 — Handle appearance updates and structural design previews
+### M8-E — Handle appearance updates and structural design previews
 
 1. Reproject one world-space atlas across viewpoints. Do not independently inpaint every camera frame.
 2. Stage new textures and adopt them only after calibration, frame, and generation checks.
@@ -90,7 +92,7 @@ Deliverable: renderer behavior consistent with M7 commit, rollback, and undo sem
 
 Deliverable: incremental appearance updates that preserve geometry, revision ownership, and clear view semantics.
 
-### M8.6 — Add diagnostics and bounded degradation
+### M8-F — Add diagnostics and bounded degradation
 
 1. Expose developer views for original camera, erasure mask, protected foreground, depth, reconstructed shell, and final composite.
 2. Record frame age, queue depth, dropped bundles, render time, GPU-resource counts, memory warnings, and thermal state.
@@ -166,8 +168,8 @@ Run workspace TypeScript checks, existing gates, new compositor state scenarios,
 
 ## Completion evidence record
 
-- Implementation commit and native bridge/patch details: **not recorded**.
-- Local commands and scenario results: **not recorded**.
+- Implementation commit and native bridge/patch details: **working-tree implementation; Expo GL 57.0.2 internal context lookup, no node_modules patch; see [handoff](../m8-native-texture-feasibility.md)**.
+- Local commands and scenario results: **TypeScript, eight M8 scenarios, app/server gates, iOS JS export, Swift parse, and podspec syntax pass. Worker gate blocked by missing Python OpenCV. Native compilation remains unrun. See [handoff](../m8-native-texture-feasibility.md)**.
 - Device model, OS, native build, lockfile hash, and render resolution: **not recorded**.
 - Active capture, reconstruction, and compositor adapter IDs: **not recorded**.
 - Walkthrough, mask/depth views, and hand-crossing recordings: **not recorded**.

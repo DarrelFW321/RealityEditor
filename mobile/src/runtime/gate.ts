@@ -19,7 +19,7 @@ async function main() {
   const only = process.argv[2]?.toUpperCase();
   const selected = only ? scenarios.filter((s) => s.milestone === only) : scenarios;
   if (!selected.length) {
-    console.error(`No scenarios for "${only ?? 'all'}". Known: M2, M3.`);
+    console.error(`No scenarios for "${only ?? 'all'}". Known: ${[...new Set(scenarios.map(s => s.milestone))].join(', ')}.`);
     process.exit(2);
   }
 

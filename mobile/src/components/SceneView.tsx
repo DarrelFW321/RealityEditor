@@ -7,6 +7,7 @@ import type { Shell } from '@reality/contracts';
 import { parts, type EngineSnapshot } from '@reality/spatial-engine';
 import type { Vec3 } from '@reality/contracts';
 import type { TrackedFrame } from '../adapters/roomplan';
+import { NativeFrameDiagnostic, type FrameDiagnosticMode, type FrameDiagnosticSample } from './NativeFrameDiagnostic';
 
 function CameraPose({
   frame,
@@ -58,6 +59,8 @@ export function SceneView({
   shell,
   atlasUri,
   onRenderFps,
+  frameDiagnostic = 'off',
+  onFrameDiagnostic,
 }: {
   snapshot: EngineSnapshot;
   selectedId: string | null;
@@ -71,6 +74,8 @@ export function SceneView({
   shell?: Shell | null;
   atlasUri?: string | null;
   onRenderFps?: (fps: number) => void;
+  frameDiagnostic?: FrameDiagnosticMode;
+  onFrameDiagnostic?: (sample: FrameDiagnosticSample) => void;
 }) {
   const scene = snapshot.previewScene ?? snapshot.scene;
   const floor = scene.design.surfaces.find((s) => s.class === 'floor');
@@ -91,7 +96,10 @@ export function SceneView({
         gl.setClearColor('#0c1420', frame ? 0 : 1);
       }}
     >
-      {frame && <CameraPose frame={frame} origin={origin} />}
+      {frame && frameDiagnostic === 'off' && <CameraPose frame={frame} origin={origin} />}
+      {frame && frameDiagnostic !== 'off' && onFrameDiagnostic && (
+        <NativeFrameDiagnostic frameId={snapshot.scene.frameId} mode={frameDiagnostic} onSample={onFrameDiagnostic} />
+      )}
       {onRenderFps && <RenderDiagnostics onSample={onRenderFps} />}
       <ambientLight intensity={1.6} />
       <directionalLight position={[3, 8, 4]} intensity={2} />

@@ -14,11 +14,15 @@ import type { Shell } from '@reality/contracts';
  * the PRD is explicit that the two are not the same thing.
  */
 export function ShellView({ shell, atlasUri }: { shell: Shell; atlasUri: string | null }) {
-  const [texture, setTexture] = useState<Texture | null>(null);
+  const [loadedAtlas, setLoadedAtlas] = useState<{ uri: string; texture: Texture } | null>(null);
+  // Do not render the previous room's texture while a new atlas is loading.
+  const texture = loadedAtlas?.uri === atlasUri ? loadedAtlas.texture : null;
 
   useEffect(() => {
+    setLoadedAtlas(null);
     if (!atlasUri) return;
     let cancelled = false;
+    let ownedTexture: Texture | null = null;
     // R3F's native entry patches TextureLoader to resolve through expo-asset and upload
     // via EXGL. That path has been installed and unused since the project started; this
     // is its first consumer, which is why the atlas is handed over as a file URI rather
@@ -34,13 +38,15 @@ export function ShellView({ shell, atlasUri }: { shell: Shell; atlasUri: string 
         // The atlas is sampled by explicit UVs, so any wrapping would smear one surface's
         // texels into its neighbour's rectangle rather than tiling anything.
         loaded.flipY = false;
-        setTexture(loaded);
+        ownedTexture = loaded;
+        setLoadedAtlas({ uri: atlasUri, texture: loaded });
       },
       undefined,
-      () => setTexture(null),
+      () => { if (!cancelled) setLoadedAtlas(null); },
     );
     return () => {
       cancelled = true;
+      ownedTexture?.dispose();
     };
   }, [atlasUri]);
 
@@ -65,9 +71,8 @@ export function ShellView({ shell, atlasUri }: { shell: Shell; atlasUri: string 
   useEffect(
     () => () => {
       geometries.forEach(({ geometry }) => geometry.dispose());
-      texture?.dispose();
     },
-    [geometries, texture],
+    [geometries],
   );
 
   if (!texture) return null;

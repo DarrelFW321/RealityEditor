@@ -26,6 +26,8 @@ import {
   type ScenarioResult,
 } from '../runtime/scenarios';
 import type { ReconstructionPhase } from '../runtime/reconstruction';
+import { textureBridgeAvailable } from '../adapters/frame-textures';
+import type { FrameDiagnosticMode, FrameDiagnosticSample } from './NativeFrameDiagnostic';
 
 export function EditorPanel({
   editor,
@@ -66,6 +68,8 @@ export function EditorPanel({
   // measured room is the working surface, and the shell is something you turn on to look
   // at rather than something that silently replaces what you were editing against.
   const [showShell, setShowShell] = useState(false);
+  const [frameDiagnostic, setFrameDiagnostic] = useState<FrameDiagnosticMode>('off');
+  const nativeFrameSample = useRef<FrameDiagnosticSample | null>(null);
   const [gate, setGate] = useState<ScenarioResult[]>([]);
   const [gateRunning, setGateRunning] = useState<Scenario['milestone'] | null>(null);
   const [gateMilestone, setGateMilestone] = useState<Scenario['milestone'] | null>(null);
@@ -98,6 +102,7 @@ export function EditorPanel({
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (s) => {
       if (s !== 'active') {
+        setFrameDiagnostic('off');
         editor.engine.setTracking(false);
         void slot.current.dispose();
         setVoice(false);
@@ -179,7 +184,7 @@ export function EditorPanel({
       // Repeating a solver-heavy scenario is the only check that a result was reasoned
       // rather than sampled.
       const repeatable = scenariosFor(milestone).find(
-        (s) => s.id === { M2: 'overlap', M3: 'carry-adjust', M4: 'calib-inferred' }[milestone],
+        (s) => s.id === { M2: 'overlap', M3: 'carry-adjust', M4: 'calib-inferred', M8: 'm8-frame-identity' }[milestone],
       );
       if (repeatable) {
         const repeat = await checkDeterminism(repeatable);
@@ -255,6 +260,8 @@ export function EditorPanel({
           frame={frame}
           origin={origin}
           diagnostics={dev}
+          frameDiagnostic={dev ? frameDiagnostic : 'off'}
+          onFrameDiagnostic={sample => { nativeFrameSample.current = sample; }}
           shell={showShell && reconstruction?.state === 'ready' ? reconstruction.shell : null}
           atlasUri={reconstruction?.state === 'ready' ? reconstruction.atlasUri : null}
           onRenderFps={(fps) => {
@@ -510,6 +517,22 @@ export function EditorPanel({
             <Text style={styles.detail}>
               Camera ownership: {spatialOwner ?? 'development scene'}
             </Text>
+            {frame && (
+              <>
+                <Text style={styles.detail}>
+                  M8 native-frame feasibility only — live erasure unavailable until device acceptance.
+                  {!textureBridgeAvailable() ? ' Rebuild the native app to enable the texture bridge.' : ''}
+                </Text>
+                {(['off', 'camera', 'depth', 'confidence', 'foreground'] as const).map(mode => (
+                  <Button key={mode} title={`M8 ${mode}${frameDiagnostic === mode ? ' ✓' : ''}`}
+                    disabled={!textureBridgeAvailable() && mode !== 'off'}
+                    onPress={() => { setShowShell(false); setFrameDiagnostic(mode); }} />
+                ))}
+                {nativeFrameSample.current && <Text style={styles.detail}>
+                  Native frame age: {Number.isFinite(nativeFrameSample.current.ageMs) ? nativeFrameSample.current.ageMs.toFixed(0) : 'unavailable'} ms · leases {nativeFrameSample.current.leasedSlots}/3 · dropped {nativeFrameSample.current.dropped} · rejected {nativeFrameSample.current.rejected} · errors {nativeFrameSample.current.errors} · depth {nativeFrameSample.current.depth ? 'yes' : 'no'} · foreground {nativeFrameSample.current.foreground ? 'yes' : 'no'}
+                </Text>}
+              </>
+            )}
             <Text style={styles.detail}>
               Viewport:{' '}
               {frame?.current
@@ -590,7 +613,7 @@ export function EditorPanel({
               />
             )}
             <View style={styles.row}>
-              {(['M2', 'M3', 'M4'] as const).map((milestone) => (
+              {(['M2', 'M3', 'M4', 'M8'] as const).map((milestone) => (
                 <Button
                   key={milestone}
                   title={gateRunning === milestone ? 'Running…' : `Run ${milestone} gate`}

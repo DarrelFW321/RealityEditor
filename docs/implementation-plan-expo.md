@@ -13,9 +13,10 @@ Planning baseline, 2026-09-19: **M5 is complete, as confirmed by the project own
 | M6 — Coordinated inputs | Hands, touch, and voice edit one scene with reliable turn binding and shared transactions | [Hands and voice](milestones/m6-hands-and-voice.md) |
 | M7 — Creation and restyling | Generate editable, valid layouts and commit restyles as one undoable transaction | [Creation and restyling](milestones/m7-creation-and-restyling.md) |
 | M8 — Live compositing | Erase unwanted furniture pixels while preserving foreground hands and correct depth ordering | [Live compositing](milestones/m8-live-compositing.md) |
+| M8.5 — Optional world-model evaluation | Compare inferred appearance against the accepted M8 baseline and decide adopt, defer, or reject | [Research, implementation plan, and gates](milestones/m8-5-world-model-evaluation.md) |
 | M9 — Internal release candidate | Deliver a reproducible internal build with a verified full journey and operational recovery | [Internal release candidate](milestones/m9-internal-release-candidate.md) |
 
-Implementation order is **M6 → M7 → M8 → M9**. M8's native texture feasibility work can begin during M6; subsequent M8 transaction integration depends on M7. This dependency allows independent work but does not require parallel agents or additional staffing.
+Implementation order is **M6 → M7 → M8 → optional M8.5 → M9**. M8's native texture feasibility work can begin during M6; subsequent M8 transaction integration depends on M7. M8.5 desk research can start earlier, but final comparisons require accepted M8 device evidence. World-model adoption is optional: deferral or rejection proceeds to M9 with the baseline. This dependency allows independent work but does not require parallel agents or additional staffing.
 
 ### Agreed scope and completion rules
 
@@ -84,6 +85,7 @@ Each milestone ends in a reviewable change, a runnable demonstration, and an evi
 | M6 — Coordinated hands and voice | M3, M4 | One Realtime session, synchronized SCP, shared commands and tool results | Point/select then point/destination works despite delayed tools; voice and hands edit one transaction; interruptions and duplicate calls are safe |
 | M7 — Creation and restyling | M2, M3, M5, M6 | Procedural object families, structured recipes, assembly rules, grouped restyles | Blue bedroom/three frames demo; dimensions/colors/count edits; plausible three-legged bed or explained rejection; no committed overlap |
 | M8 — Live compositing | M1, M5, M7 | Clean-shell compositing, depth/hand occlusion, incremental appearance updates | Camera motion and hand crossing do not expose stale furniture masks or erase the hand; uncertain regions remain identified |
+| M8.5 — Optional world-model evaluation | Accepted M8 for final comparisons | Controlled appearance-provider comparison, bounded integration if adopted, and baseline fallback | Recorded adopt/defer/reject decision; adoption requires measured geometry preservation, visual benefit, native performance, privacy, and recovery gates |
 | M9 — Integrated release candidate | M3–M8 | Staging build, supported-device matrix, diagnostics runbook, migration/cutover checklist | Full journey demonstrated on supported hardware with recorded performance; no critical unresolved spatial errors; rollback build retained |
 
 M1 and M2 can progress independently after M0. Worker orchestration in M5 can start with synthetic captures while M4 develops, but cannot pass its geometry gate until calibrated capture works. Recipe builders in M7 can similarly start against fixtures. Do not treat early scaffold completion as completion of these milestones.
