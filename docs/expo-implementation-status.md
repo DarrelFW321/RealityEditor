@@ -325,9 +325,17 @@ Only `observing` may request `scan` now. `needs_view` also gained a **Keep scann
 which makes the extra-view prompt actionable rather than decorative — the retained ARSession
 means the coverage already gathered stays valid across a re-run.
 
-Two diagnostics were added to the Modules overlay so neither failure is silent again: a
-frame-identity line that turns red on a scene/live mismatch and says hand targeting is
-disabled, and the fingertip in both raw and display space.
+Diagnostics were added to the Modules overlay so neither failure is silent again: a
+frame-identity line that turns red on a scene/live mismatch and states that hand targeting
+is disabled, and a hand line that names the failing stage.
+
+That second one exists because `acceptHand` made three different failures look identical
+from JavaScript. `x`/`y` are published only once the hand is active, and the raw fingertip
+was itself gated on the point already being in view, so "Vision found no hand", "found one
+whose point mapped outside the viewport" and "found one below the 0.60 activation gate" all
+arrived as `visible: false, confidence: 0`. Native now reports `detected`, `inView`,
+`rawConfidence` and both the raw and display points before any gate, and the overlay turns
+that into one sentence naming which stage failed.
 
 **`rawImagePoint` was checked and is correct.** It is the exact inverse of the EXIF rotation
 for all four orientations, verified by round-tripping the forward rotation through it. That
@@ -375,7 +383,7 @@ revises the anchor usefully in a real room is a device question. M1 gate step 3 
 Measured on this machine, not on device. `npm run gate` reports **24/24**: five M2
 scenarios, eight M3, eight M4, and three determinism checks.
 
-The six M4 scenarios replay recorded captures through `roomToSession`, so the calibration
+The eight M4 scenarios replay recorded captures through `roomToSession`, so the calibration
 judgement is verifiable with no hardware:
 
 | Scenario | Gate clause |
