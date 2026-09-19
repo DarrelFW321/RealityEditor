@@ -115,10 +115,23 @@ export default function Home() {
                 });
               }
               if (e.nativeEvent.code === 'scan_progress') {
-                setRoomDegrees(e.nativeEvent.scanDegrees ?? 0);
+                // READ THE VALUES OUT BEFORE THE UPDATER RUNS.
+                //
+                // A `set*(prev => …)` updater is invoked lazily, during the next
+                // render — not when this handler returns. React Native reuses
+                // synthetic events and nulls `nativeEvent` once the handler is
+                // done, so closing over `e` here threw
+                // "Cannot read property 'wallCount' of null" from inside
+                // `basicStateReducer`, with a stack that points at render rather
+                // than at this line.
+                //
+                // The `observing` branch above is safe only because it computes a
+                // plain object immediately instead of deferring.
+                const { scanDegrees, wallCount, floorCount } = e.nativeEvent;
+                setRoomDegrees(scanDegrees ?? 0);
                 setRoomCoverage((current) => ({
-                  walls: e.nativeEvent.wallCount ?? current.walls,
-                  floors: e.nativeEvent.floorCount ?? current.floors,
+                  walls: wallCount ?? current.walls,
+                  floors: floorCount ?? current.floors,
                   openings: current.openings,
                 }));
               }
