@@ -1,3 +1,4 @@
+export * from './captures';
 import type { EditorState, Rsg, SceneObject } from '@reality/contracts';
 import room from '../../../contracts/fixtures/rooms/bedroom_4x4.rsg.json';
 

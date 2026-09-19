@@ -111,7 +111,10 @@ export function reasonFor(
   }
 }
 
-function compass(normal: Vec3): string {
+/** Which wall of the room this normal belongs to, in words a person can act on.
+ * Exported so the calibration coverage prompts name a direction the same way a placement
+ * alternative does. */
+export function compass(normal: Vec3): string {
   if (normal[2] > 0.9) return 'north';
   if (normal[2] < -0.9) return 'south';
   if (normal[0] < -0.9) return 'east';

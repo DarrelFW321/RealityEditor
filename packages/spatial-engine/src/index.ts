@@ -31,6 +31,7 @@ export * from './geometry';
 export * from './clearances';
 export * from './solver';
 export * from './structure';
+export * from './coverage';
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 

@@ -1,23 +1,27 @@
 import { useMemo, useRef, type MutableRefObject } from 'react';
 import { Canvas, useFrame, type ThreeEvent } from '@react-three/fiber/native';
 import { Shape, Matrix4, Vector2 } from 'three';
+import { roomFromWorld } from '../adapters/room-space';
 import { parts, type EngineSnapshot } from '@reality/spatial-engine';
 import type { Vec3 } from '@reality/contracts';
 import type { TrackedFrame } from '../adapters/roomplan';
 
 function CameraPose({
   frame,
-  floorOffset,
+  origin,
 }: {
   frame: MutableRefObject<TrackedFrame | null>;
-  floorOffset: number;
+  origin: Vec3;
 }) {
   const matrix = useMemo(() => new Matrix4(), []);
+  const toRoom = useMemo(() => new Matrix4(), []);
   useFrame(({ camera }) => {
     const current = frame.current;
     if (!current) return;
-    matrix.fromArray(current.cameraToWorld);
-    matrix.elements[13]! -= floorOffset;
+    // Follow the anchor rather than subtracting a fixed offset: ARKit revises the anchor
+    // as it improves its map, and that revision is exactly the drift correction.
+    toRoom.fromArray(roomFromWorld(current.roomAnchor, origin));
+    matrix.fromArray(current.cameraToWorld).premultiply(toRoom);
     matrix.decompose(camera.position, camera.quaternion, camera.scale);
     camera.projectionMatrix.fromArray(current.projection);
     camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
@@ -47,7 +51,7 @@ export function SceneView({
   onPoint,
   onRelease,
   frame,
-  floorOffset = 0,
+  origin = [0, 0, 0],
   diagnostics = false,
   onRenderFps,
 }: {
@@ -57,7 +61,7 @@ export function SceneView({
   onPoint: (point: Vec3, surfaceId: string) => void;
   onRelease: () => void;
   frame?: MutableRefObject<TrackedFrame | null>;
-  floorOffset?: number;
+  origin?: Vec3;
   diagnostics?: boolean;
   onRenderFps?: (fps: number) => void;
 }) {
@@ -80,7 +84,7 @@ export function SceneView({
         gl.setClearColor('#0c1420', frame ? 0 : 1);
       }}
     >
-      {frame && <CameraPose frame={frame} floorOffset={floorOffset} />}
+      {frame && <CameraPose frame={frame} origin={origin} />}
       {onRenderFps && <RenderDiagnostics onSample={onRenderFps} />}
       <ambientLight intensity={1.6} />
       <directionalLight position={[3, 8, 4]} intensity={2} />

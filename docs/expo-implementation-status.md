@@ -11,7 +11,7 @@ Implementation started 2026-09-18. This is a working migration foundation, not a
 - Compound box collision queries, room-boundary/opening checks, retained physical-obstacle handling and explicit construction uncertainty.
 - Parameterized table, bed, cabinet, shelf and frame assemblies used for both rendering and collisions. Multi-object additions are atomic.
 - Expo editor with touch controls, voice tool integration and a development command/diagnostics panel.
-- Vision Camera capture screen and explicit handoff to a local RoomPlan/ARKit module. Native code exports room surfaces, tracked camera matrices and Apple Vision hand cursor/pinch samples.
+- Single-turn RoomPlan/ARKit calibration with pose-derived coverage, targeted extra-view prompts, confidence- and coverage-driven measured/inferred provenance, and retained partial results on failure. Native code exports room surfaces, tracked camera matrices and Apple Vision hand cursor/pinch samples.
 - Fastify `/voice/session` compatibility alias, calibration sessions, bounded aligned-frame upload, asynchronous job lifecycle, scoped artifacts, cancellation and expiry. Cloud inference runs through a replaceable external worker adapter.
 
 ## Milestone assessment
@@ -22,7 +22,7 @@ Implementation started 2026-09-18. This is a working migration foundation, not a
 | M1 Native feasibility | Reworked after the first device run exposed missing behavior; local checks pass | Build this revision and repeat the complete [M1 physical-device gate](m1-native-feasibility.md) |
 | M2 Spatial engine | Implemented; gate scenarios pass locally | Relation and occupancy recomputation (M6), `APPLY_STYLE` expansion (M7), device demonstration |
 | M3 Carry/release | Implemented; gate scenarios pass locally | Device demonstration |
-| M4 Calibration | Native measurement flow written | Coverage/confidence acceptance, inferred-shell guidance, non-LiDAR alternative and multiroom handling |
+| M4 Calibration | Implemented; gate scenarios pass locally against replayed captures | Device captures; non-LiDAR capture route; multiroom handling |
 | M5 Reconstruction | API, client and worker boundary implemented | Vision Camera-to-room registration; deployed segmentation/completion pipeline; projected atlases and verified cleanup across external providers |
 | M6 Hands/voice | Integration written | Device audio, fingertip alignment, turn/context timing and concurrent input demonstration |
 | M7 Creation/restyle | Procedural additions and basic edits implemented | General room-aware layout search, count-change groups, grouped mask/scene transactions, supported unusual assemblies |
@@ -213,6 +213,200 @@ Numbers behind the claims:
 Not established here: anything requiring hardware. The on-device carry demonstration is step 5
 of the [M1 physical-device gate](m1-native-feasibility.md) and still depends on a native
 rebuild after the repository move.
+
+## M4 calibration journey
+
+The guided sweep and the physical-obstacle layer already existed. M4 replaced the completion
+test, gave calibration the states the PRD names, and made the measured/inferred distinction
+real instead of nominal.
+
+- **Coverage decides completion, not turn angle.** `packages/spatial-engine/src/coverage.ts`
+  accumulates which 15° sectors the camera actually faced, under normal tracking, from the
+  `onFrame` pose stream. A wall counts as measured when at least 75% of the angular span it
+  subtends from the floor centroid was observed. The old test was `scanDegrees >= 270 &&
+  walls >= 3`, which a phone spun on the spot with the lens covered satisfies.
+- **This is TypeScript, and that was the point.** `onFrame` already ships `cameraToWorld` and
+  `tracking` at 20Hz in every mode, so the evidence was already crossing the bridge. Forming
+  the judgement on the JavaScript side means the whole calibration rule set replays from a
+  recorded capture and no native rebuild sits on the path of a change to the rules. **No Swift
+  was modified for this milestone.**
+- **Extra-view prompts name a direction.** `needs_view` fires only when a boundary is almost
+  entirely unseen (under 25% of its span), and the prompt says "Turn toward the west wall",
+  reusing the same `compass()` helper that narrates placement alternatives. Degraded tracking
+  gets different wording because the fix is different: hold still, rather than turn.
+- **Shell confidence is two signals, and coverage outranks RoomPlan.** A `.low` RoomPlan
+  confidence demotes a surface to `inferred` on its own. Separately, a wall the camera never
+  faced is demoted however confident RoomPlan is — because RoomPlan closes a room and reports
+  four confident walls after a 270° turn, inferring the fourth from the three it measured.
+  Both `design` and `measured` carry the demotion, and one inferred structural surface makes
+  the envelope `provenance: 'inferred'` — an enum member that existed in the contract and had
+  never been assigned by anything.
+- **Failure keeps what it gathered.** A native `failed` or a conversion throw now lands in a
+  `failed` state showing the specific reason with a Retry, instead of silently resetting the
+  sweep to zero and returning the user to a blank scan.
+- **The physical-obstacle layer was already correct** and now has a scenario proving it: a
+  design-erased object stays a collision neighbour in `buildIndex` until it is explicitly
+  listed in `removedPhysicalIds`.
+
+### Finishing is labelled, never blocked
+
+A 270° sweep reports `ready` with the walls behind the user marked `inferred`, and
+`needs_view` always offers **Use it anyway**. That is deliberate. The PRD asks that "missing
+essential geometry cannot silently become a precise measurement" — honesty, not a locked
+door — and M2 already recorded what happens when a soft signal is promoted to a hard error.
+The editor says so on screen: an inferred shell names which surface classes were not measured
+directly.
+
+### Non-LiDAR now refuses at the start
+
+Previously a non-LiDAR device walked the user through a 300° Vision Camera sweep, reached the
+measure screen, hit `guard RoomCaptureSession.isSupported`, and offered nothing but Cancel.
+The welcome screen now explains up front that calibration needs LiDAR. `ScanCamera.tsx` is
+retained and annotated as unmounted; the `visual` and `handoff` phases were removed rather
+than left unreachable in the state machine. A real non-LiDAR capture route remains open work.
+
+### Deliberate non-goals
+
+- **Multiroom.** One `room_id`, one floor polygon, one calibration. `RoomBuilder` is
+  constructed with empty options and `CapturedStructure` is never referenced. Deferred.
+- **Keyframe upload.** Six pose+intrinsics keyframes are captured, counted and dropped. The
+  client, Fastify routes, store and worker boundary all exist and nothing calls them; wiring
+  that path — and reconciling `calibrationId`, which currently holds a RoomPlan id rather
+  than the server's UUID, and `calibrationRevision`, which is always `0` — is M5's work.
+- **Door swing.** Every device-captured door still has `swing: null`, so the conservative box
+  from M2 applies. The frozen RSG schema carries provenance per surface, not per attribute, so
+  an inferred hinge on a measured door cannot be expressed; inventing one would be worse.
+- **No schema change.** `rsg.schema.json` is a frozen interface with
+  `additionalProperties: false`, and `Surface.provenance` already means exactly what coverage
+  needed to say.
+
+### Two bugs the first M4 device run found
+
+Both were invisible locally because the development fixture is a 4x4m room built centred on
+the origin, and because the sweep integrator has no headless harness.
+
+- **Every added object was refused as "Outside the calibrated room".** `roomToSession`
+  applied only the floor's Y offset, leaving X and Z in ARKit world space, so a scanned room
+  sat wherever the AR session had started rather than at its own centroid. `rsg.schema.json`
+  is explicit that "origin sits at the centroid of the floor polygon", and `add` with no
+  pointed destination defaults to `[0,0,0]` — which on a real scan is outside the floor
+  polygon. The conversion now recentres the room and records the displacement in
+  `frame.world_transform`, which is what that field is for. `CameraPose` and the hand ray
+  subtract the full origin vector rather than height alone; `floorOffset: number` became
+  `origin: Vec3` along that path. `offset-origin.capture.json` and the `calib-origin`
+  scenario pin it: a room 7.3m off-origin recentres to +/-2m and accepts an add.
+
+- **A 270 degree turn read about 210.** `updateScanProgress` rejected any sample whose yaw
+  delta exceeded 0.35 rad while still advancing `scanYaw`, so the rotation in that sample was
+  lost permanently. 0.35 rad is 20 degrees per sample; the frame pump is throttled to 20Hz
+  but runs slower under RoomPlan's load, making that an ordinary brisk turn rather than the
+  tracking glitch the guard was written for. It now rejects on implied *rate* (above ~690
+  deg/s) instead. The paired `abs(delta) > 0.001` floor was also removed: it discarded every
+  sample below 0.057 degrees, which at 20Hz is 1.1 deg/s, so the slow steady sweep the app
+  asks for accumulated nothing. Tremor is unbiased and cancels in the directed sum, and the
+  direction latch already requires ~7 degrees of evidence.
+
+  **This one is native and needs a rebuild to take effect.** It also has no headless gate:
+  the integrator reads `ARFrame` poses, and a TypeScript re-implementation would prove only
+  that the copy agrees with itself. Device gate step 2a covers it.
+
+### A third bug, introduced by M4's own phase rework
+
+**Hand manipulation stopped working entirely.** The new `needs_view` and `failed` states kept
+the native view's `mode` prop at `scan`, but both are reached *after* RoomPlan has finished and
+emitted its room. `setMode` only guards against `next == mode`, so `scan` arriving while the
+native side sat in `edit` passed straight through and started a fresh `RoomCaptureSession` —
+which mints a new `frameId`. The scene had been built with the old one, and `resolveHand`
+refuses any frame whose id does not match the scene, so the cursor drew but targeted nothing:
+`begin` never fired, and no object could be picked up. Reaching only ~210° made `needs_view`
+the likely landing state, which is why this showed up together with the sweep bug.
+
+Only `observing` may request `scan` now. `needs_view` also gained a **Keep scanning** button,
+which makes the extra-view prompt actionable rather than decorative — the retained ARSession
+means the coverage already gathered stays valid across a re-run.
+
+Two diagnostics were added to the Modules overlay so neither failure is silent again: a
+frame-identity line that turns red on a scene/live mismatch and says hand targeting is
+disabled, and the fingertip in both raw and display space.
+
+**`rawImagePoint` was checked and is correct.** It is the exact inverse of the EXIF rotation
+for all four orientations, verified by round-tripping the forward rotation through it. That
+inversion is deliberate and necessary: Vision returns points in the EXIF-oriented upright
+image, while `ARFrame.displayTransform` expects normalized coordinates in the captured
+buffer's native space. Undoing the rotation is what gets the fingertip into the space the
+transform consumes.
+
+### Drift: the room is now anchored
+
+Reported from device as drift and inconsistent placement. The cause was structural: **there
+was no `ARAnchor` anywhere in the project.** Room geometry was frozen against the ARKit world
+origin as it stood the instant the scan finished, and the camera was mapped by subtracting a
+fixed vector every frame. ARKit keeps refining that estimate — relocalisation and loop closure
+move the world frame — and nothing told the room, so placed objects slid off the real surfaces
+they were placed on.
+
+ARKit revises anchor transforms when it improves its understanding of a space. The room origin
+now carries an `ARAnchor`, and every frame reports that anchor's *current* transform rather
+than the one it was created with. `roomFromWorld` prefers it and falls back to the scan-time
+origin for the development room, for the frames before the anchor exists, and for a malformed
+anchor.
+
+Two details worth keeping:
+
+- **A full matrix, not a translation.** A relocalisation can rotate the anchor as well as move
+  it. Subtracting a vector would silently drop the rotation, and the hand ray would keep
+  pointing the old way.
+- **No renderer dependency.** An anchor transform is rigid, so the inverse is a transposed
+  rotation with a re-derived translation. That is cheaper than a general 4x4 invert and keeps
+  the module loadable by the headless gate.
+
+Measured in `calib-anchor`: a world revision of 12cm and 3 degrees puts a placed point
+**48.6cm** out of position with the static origin, and **0.000mm** out when following the
+anchor. The scenario also pins the fallbacks, because a wrong fallback would break the
+development room rather than the device.
+
+This is the third change to the coordinate pipeline in this milestone and the only one that
+cannot be checked without hardware — the arithmetic is gated, but whether ARKit actually
+revises the anchor usefully in a real room is a device question. M1 gate step 3 (drift over a
+60-second loop) is the acceptance test.
+
+### M4 evidence
+
+Measured on this machine, not on device. `npm run gate` reports **24/24**: five M2
+scenarios, eight M3, eight M4, and three determinism checks.
+
+The six M4 scenarios replay recorded captures through `roomToSession`, so the calibration
+judgement is verifiable with no hardware:
+
+| Scenario | Gate clause |
+|---|---|
+| An empty-room capture converts as measured | empty-room capture |
+| Scanned furniture stays a physical obstacle | physical obstacle layer |
+| The unobserved wall is inferred, not measured | measured/inferred distinction |
+| RoomPlan low confidence becomes inferred | shell confidence |
+| An incomplete sweep asks for the missing view | extra-view prompts, tracking loss |
+| A failed capture explains itself | incomplete scans recover clearly |
+| A room away from the ARKit origin is usable | regression from the first device run |
+| The room follows ARKit corrections instead of drifting | drift reported from device |
+
+Behaviour behind the claims, from the replayed 4×4 m capture:
+
+- A **180°** sweep reports `needs_view` and names the west wall. A **270°** sweep reports
+  `ready` with two walls `inferred` and the envelope `inferred`. A **360°** sweep reports
+  `ready` with nothing inferred and the envelope `observed`.
+- The same capture converted **without** a coverage mask labels all four walls `real`, which
+  is what the code did before this milestone.
+- A full 360° turn recorded entirely under `limited` tracking is **not** accepted, and the
+  prompt says tracking rather than aim was the problem.
+- A two-wall capture is refused with "Show more room boundaries before editing.", and a good
+  capture converts normally afterwards.
+- The missing-floor capture derives a 16.0 m² floor from the wall bases and tags it `inferred`.
+
+**The fixtures under `contracts/fixtures/rooms/captures/` are synthetic.** They exercise every
+branch of the conversion but they are not evidence that a real scan behaves this way, and the
+gate line says "device captures". A development build now has a **Save capture as fixture**
+button that writes the raw `roomJSON` and its coverage mask; those files drop into the fixture
+directory unchanged and the scenarios do not need to change to consume them.
 
 ## Worker integration
 

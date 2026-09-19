@@ -30,15 +30,20 @@ export function EditorPanel({
   editor,
   frame,
   handFrame,
-  floorOffset,
+  origin,
   spatialOwner,
+  onSaveCapture,
   onExit,
 }: {
   editor: Editor;
   frame?: MutableRefObject<TrackedFrame | null>;
   handFrame?: MutableRefObject<TrackedFrame | null>;
-  floorOffset?: number;
+  /** Room-space origin in ARKit world coordinates. */
+  origin?: Vec3;
   spatialOwner?: string;
+  /** Writes the capture this room came from out as an M4 gate fixture. Absent for the
+   * development room, which was never captured. */
+  onSaveCapture?: () => string;
   onExit: () => void;
 }) {
   const snapshot = useSyncExternalStore(editor.engine.subscribe, editor.engine.getSnapshot);
@@ -117,7 +122,7 @@ export function EditorPanel({
         );
         const state = editor.engine.getSnapshot();
         const carriedId = state.phase === 'held' ? state.preview?.targetId : undefined;
-        const hit = resolveHand(hand, state.scene, floorOffset ?? 0, carriedId),
+        const hit = resolveHand(hand, state.scene, origin ?? [0, 0, 0], carriedId),
           down = !!hand.hand?.pinching;
         if (!hit && hand.hand?.x === undefined) setDestination(null);
         // An object hit is a destination only when it can actually carry the load.
@@ -154,7 +159,7 @@ export function EditorPanel({
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [editor, handFrame, floorOffset]);
+  }, [editor, handFrame, origin]);
   /** One runner for both gates. The M2 and M3 suites differ only in which scenarios
    * they select, so duplicating the button would let one drift behind the other. */
   async function runGate(milestone: Scenario['milestone']) {
@@ -166,7 +171,7 @@ export function EditorPanel({
       // Repeating a solver-heavy scenario is the only check that a result was reasoned
       // rather than sampled.
       const repeatable = scenariosFor(milestone).find(
-        (s) => s.id === (milestone === 'M2' ? 'overlap' : 'carry-adjust'),
+        (s) => s.id === { M2: 'overlap', M3: 'carry-adjust', M4: 'calib-inferred' }[milestone],
       );
       if (repeatable) {
         const repeat = await checkDeterminism(repeatable);
@@ -240,7 +245,7 @@ export function EditorPanel({
           onPoint={point}
           onRelease={release}
           frame={frame}
-          floorOffset={floorOffset}
+          origin={origin}
           diagnostics={dev}
           onRenderFps={(fps) => {
             renderFps.current = fps;
@@ -380,6 +385,18 @@ export function EditorPanel({
           />
           {__DEV__ && <Button title="Modules" onPress={() => setDev(!dev)} />}
         </View>
+        {/* Unknown space must not read as verified space. A shell with inferred structure
+            says so here rather than letting the room imply it was all measured. */}
+        {snapshot.scene.provenance === 'inferred' && (
+          <Text style={styles.detail}>
+            Partly inferred:{' '}
+            {snapshot.scene.design.surfaces
+              .filter((s) => s.provenance === 'inferred' && s.state === 'present')
+              .map((s) => s.class)
+              .join(', ')}{' '}
+            were not measured directly. Placements against them are estimates.
+          </Text>
+        )}
         {snapshot.scene.removedPhysicalIds.length > 0 && (
           <Text style={styles.detail}>
             Design preview: {snapshot.scene.removedPhysicalIds.length} physical objects require
@@ -453,13 +470,62 @@ export function EditorPanel({
               · hand {handFrame?.current?.hand?.visible ? 'visible' : 'not visible'}
             </Text>
             {handFrame?.current?.hand && (
-              <Text style={styles.detail}>
-                Hand confidence {handFrame.current.hand.confidence.toFixed(2)} · pinch{' '}
-                {handFrame.current.hand.pinching ? 'closed' : 'open'} · Vision{' '}
-                {handFrame.current.hand.processed} processed / {handFrame.current.hand.dropped} dropped
-                {' · '}{handFrame.current.hand.latencyMs.toFixed(0)} ms
-              </Text>
+              <>
+                <Text style={styles.detail}>
+                  Hand confidence {handFrame.current.hand.confidence.toFixed(2)} · pinch{' '}
+                  {handFrame.current.hand.pinching ? 'closed' : 'open'} · Vision{' '}
+                  {handFrame.current.hand.processed} processed / {handFrame.current.hand.dropped} dropped
+                  {' · '}{handFrame.current.hand.latencyMs.toFixed(0)} ms
+                </Text>
+                {/* Names the stage that is failing. Without this a dead cursor looks the
+                    same whether Vision found nothing, found a hand whose point landed
+                    off-screen, or found one below the activation gate. */}
+                {(() => {
+                  const h = handFrame.current!.hand!;
+                  const [reason, bad] = !h.detected
+                    ? ['Vision found no hand in this frame', true]
+                    : h.inView === false
+                      ? [
+                          `fingertip mapped OUTSIDE the viewport at ${h.displayX?.toFixed(2)}, ${h.displayY?.toFixed(2)} — orientation or viewport is wrong`,
+                          true,
+                        ]
+                      : !h.visible
+                        ? [
+                            `seen at confidence ${(h.rawConfidence ?? 0).toFixed(2)}, below the 0.60 needed to activate`,
+                            true,
+                          ]
+                        : ['tracking the fingertip', false];
+                  return (
+                    <Text style={bad ? styles.error : styles.good}>Hand: {reason}</Text>
+                  );
+                })()}
+                <Text style={styles.detail}>
+                  Fingertip raw {handFrame.current.hand.rawX?.toFixed(2) ?? '—'},
+                  {handFrame.current.hand.rawY?.toFixed(2) ?? '—'} · display{' '}
+                  {handFrame.current.hand.displayX?.toFixed(2) ?? '—'},
+                  {handFrame.current.hand.displayY?.toFixed(2) ?? '—'} · smoothed{' '}
+                  {handFrame.current.hand.x?.toFixed(2) ?? '—'},
+                  {handFrame.current.hand.y?.toFixed(2) ?? '—'}
+                </Text>
+              </>
             )}
+            {/* The gate that silently killed hand targeting once before: resolveHand
+                refuses any frame whose coordinate frame is not the scene's. */}
+            <Text
+              style={[
+                styles.detail,
+                frame?.current && frame.current.frameId !== snapshot.scene.frameId
+                  ? styles.error
+                  : styles.good,
+              ]}
+            >
+              Frame identity:{' '}
+              {!frame?.current
+                ? 'no tracked frame'
+                : frame.current.frameId === snapshot.scene.frameId
+                  ? 'live frames match the scene'
+                  : `MISMATCH — scene ${snapshot.scene.frameId.slice(0, 8)}, live ${frame.current.frameId.slice(0, 8)}; hand targeting is disabled`}
+            </Text>
             <Text style={styles.detail}>
               Alignment markers: red is the AR origin; green points are measured floor boundaries.
             </Text>
@@ -469,8 +535,14 @@ export function EditorPanel({
                 ? `${gate.filter((g) => g.ok).length}/${gate.length} scenarios pass`
                 : 'not run'}
             </Text>
+            {onSaveCapture && (
+              <Button
+                title="Save capture as fixture"
+                onPress={() => setMessage(onSaveCapture())}
+              />
+            )}
             <View style={styles.row}>
-              {(['M2', 'M3'] as const).map((milestone) => (
+              {(['M2', 'M3', 'M4'] as const).map((milestone) => (
                 <Button
                   key={milestone}
                   title={gateRunning === milestone ? 'Running…' : `Run ${milestone} gate`}

@@ -1,7 +1,12 @@
 import {
+  capture,
   sampleRoomFurnished,
   sampleRoomWithBuiltIn,
+  sweepFrames,
 } from '@reality/dev-scenarios';
+import { buildIndex, CoverageTracker, evaluateCoverage } from '@reality/spatial-engine';
+import { roomToSession } from '../adapters/room-conversion';
+import { applyToPoint, roomFromWorld } from '../adapters/room-space';
 import type { EditorState, EditResult, InteractionContext, Vec3 } from '@reality/contracts';
 import { createEditor, type Editor } from './editor';
 
@@ -14,7 +19,7 @@ export type Scenario = {
   /** Which milestone gate this scenario is evidence for. The two suites share every
    * helper below but prove different things, and M3 drives the carry state machine
    * directly rather than going through `editor.intent`. */
-  milestone: 'M2' | 'M3';
+  milestone: 'M2' | 'M3' | 'M4';
   gate:
     | 'placement'
     | 'overlap'
@@ -28,7 +33,14 @@ export type Scenario = {
     | 'atomic'
     | 'stacking'
     | 'interrupt'
-    | 'voice';
+    | 'voice'
+    | 'capture'
+    | 'obstacles'
+    | 'inferred'
+    | 'confidence'
+    | 'incomplete'
+    | 'recovery'
+    | 'anchor';
   scene: () => EditorState;
   run: (editor: Editor) => Promise<StepResult[]>;
 };
@@ -107,6 +119,21 @@ const othersOf = (editor: Editor, exceptId: string) =>
       .scene.design.objects.filter((o) => o.id !== exceptId)
       .map((o) => [o.id, o.pose.position, o.pose.yaw]),
   );
+
+// ------------------------------------------------------------------ M4 capture helpers
+
+/** Replays a recorded sweep of `degrees` and returns the mask it produced. */
+function sweep(degrees: number, tracking: 'normal' | 'limited' | 'lost' = 'normal') {
+  const tracker = new CoverageTracker();
+  for (const frame of sweepFrames(degrees, tracking)) tracker.observe(frame);
+  return tracker.snapshot();
+}
+
+const provenanceOf = (scene: EditorState, id: string) =>
+  scene.design.surfaces.find((s) => s.id === id)?.provenance ?? 'missing';
+
+const wallIds = (scene: EditorState) =>
+  scene.design.surfaces.filter((s) => s.class === 'wall').map((s) => s.id);
 
 const carryTraces = (editor: Editor) =>
   editor.diagnostics
@@ -595,6 +622,240 @@ export const scenarios: Scenario[] = [
       // The same held/resolving/settling trace a gesture produces: one state machine.
       const trace = carryTraces(editor);
       steps.push(check('it runs through the carry state machine', trace.includes('held') && trace.includes('resolving') && trace.includes('committed'), trace.join(' > ')));
+      return steps;
+    },
+  },
+
+  // ------------------------------------------------------------- M4 calibration journey
+  //
+  // These replay recorded RoomPlan captures rather than driving the editor, so the whole
+  // calibration judgement is verifiable without a device. The scenario's own `scene` is an
+  // ordinary sample room; the work happens against `roomToSession` inside `run`.
+  {
+    id: 'calib-empty',
+    title: 'An empty-room capture converts as measured',
+    milestone: 'M4',
+    gate: 'capture',
+    scene: sampleRoomFurnished,
+    run: async () => {
+      const steps: StepResult[] = [];
+      const { scene, coverage } = roomToSession(capture('empty-room'), 'frame-1', sweep(360));
+      steps.push(check('the capture converts', scene.design.surfaces.length > 0, `${scene.design.surfaces.length} surfaces`));
+      steps.push(check('it is a 4x4m room with a ceiling', Math.abs(scene.design.bounds.area_m2 - 16) < 0.01 && scene.design.bounds.ceiling_height > 2, `${scene.design.bounds.area_m2.toFixed(1)}m2, ${scene.design.bounds.ceiling_height.toFixed(2)}m high`));
+      steps.push(check('an empty room has no furniture to remove', scene.design.objects.length === 0, `${scene.design.objects.length} objects`));
+      steps.push(check('a full sweep leaves nothing inferred', coverage?.status === 'ready' && coverage.inferredWallIds.length === 0, `${coverage?.status}, ${coverage?.inferredWallIds.length ?? '?'} inferred`));
+      steps.push(check('a fully observed shell is labelled observed', scene.provenance === 'observed', `provenance ${scene.provenance}`));
+      steps.push(check('every wall is measured', wallIds(scene).every((id) => provenanceOf(scene, id) === 'real'), wallIds(scene).map((id) => `${id}:${provenanceOf(scene, id)}`).join(' ')));
+      return steps;
+    },
+  },
+  {
+    id: 'calib-origin',
+    title: 'A room away from the ARKit origin is usable',
+    milestone: 'M4',
+    gate: 'capture',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      // Found on device: every added object was refused as "Outside the calibrated room".
+      // The ARKit origin is wherever the session started, and only the Y offset was being
+      // applied, so the room sat metres off-origin and `add` defaulted to [0,0,0].
+      const { scene, origin } = roomToSession(capture('offset-origin'), 'frame-1', sweep(360));
+      steps.push(check('the capture is genuinely off-origin', Math.hypot(origin[0], origin[2]) > 5, `room origin ${origin.map((n) => n.toFixed(1)).join(', ')} in world space`));
+      steps.push(check('the room is recentred on its floor centroid', scene.design.bounds.floor_polygon.every((p) => Math.abs(p[0]!) <= 2.01 && Math.abs(p[1]!) <= 2.01), JSON.stringify(scene.design.bounds.floor_polygon.map((p) => p.map((n) => Math.round(n)))) ));
+      steps.push(check('recentring preserves the measurements', Math.abs(scene.design.bounds.area_m2 - 16) < 0.01, `${scene.design.bounds.area_m2.toFixed(1)}m2`));
+      steps.push(check('the world transform records the displacement', Math.abs(scene.design.frame.world_transform[12]! - origin[0]) < 1e-6 && Math.abs(scene.design.frame.world_transform[14]! - origin[2]) < 1e-6, `translation ${scene.design.frame.world_transform.slice(12, 15).map((n) => n.toFixed(1)).join(', ')}`));
+
+      // The exact action that failed on device: add with nothing pointed at.
+      const room = createEditor(scene);
+      try {
+        const added = await room.intent(
+          { action: 'add', family: 'table' },
+          { turnId: 'scenario', clock: 'epoch', timestamp: Date.now(), revision: scene.revision, frameId: scene.frameId, selectedId: null, destination: null },
+        );
+        steps.push(check('adding with no pointed destination works', added.status === 'applied', describe(added)));
+        steps.push(check('the object is inside the room', room.engine.getSnapshot().scene.design.objects.length === 1, `${room.engine.getSnapshot().scene.design.objects.length} objects`));
+      } finally {
+        room.dispose();
+      }
+      return steps;
+    },
+  },
+  {
+    id: 'calib-anchor',
+    title: 'The room follows ARKit corrections instead of drifting',
+    milestone: 'M4',
+    gate: 'anchor',
+    scene: sampleRoomFurnished,
+    run: async () => {
+      const steps: StepResult[] = [];
+      const origin: Vec3 = [7.3, 0, -4.1];
+      const room = { x: 1, y: 0, z: 0.5 };
+      const at = (m: readonly number[], p: typeof room) => applyToPoint(m, { ...p });
+      const dist = (a: typeof room, b: typeof room) =>
+        Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+
+      // ARKit revises its map: the world frame yaws 3 degrees and shifts 12cm. The anchor
+      // moves with the real world, and so does the camera's report of the same point.
+      const yaw = (3 * Math.PI) / 180;
+      const c = Math.cos(yaw);
+      const sn = Math.sin(yaw);
+      const revision = [c, 0, -sn, 0, 0, 1, 0, 0, sn, 0, c, 0, 0.12, 0, -0.05, 1];
+      const atScan = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, ...origin, 1];
+      // anchorNow = revision * atScan, for a pure-translation atScan.
+      const moved = applyToPoint(revision, { x: origin[0], y: origin[1], z: origin[2] });
+      const anchorNow = [...revision.slice(0, 12), moved.x, moved.y, moved.z, 1];
+
+      const world = { x: room.x + origin[0], y: room.y + origin[1], z: room.z + origin[2] };
+      const observedNow = applyToPoint(revision, { ...world });
+
+      const stale = at(roomFromWorld(undefined, origin), observedNow);
+      const tracked = at(roomFromWorld(anchorNow, origin), observedNow);
+
+      steps.push(check('a world revision really does move unanchored content', dist(stale, room) > 0.1, `${(dist(stale, room) * 100).toFixed(1)}cm of drift without an anchor`));
+      steps.push(check('following the anchor cancels it', dist(tracked, room) < 1e-6, `${(dist(tracked, room) * 1000).toFixed(3)}mm residual`));
+      steps.push(check('rotation is carried, not just translation', Math.abs(tracked.x - room.x) < 1e-6 && Math.abs(tracked.z - room.z) < 1e-6, 'yaw component recovered'));
+
+      // With no anchor the fallback must still be exact, or the development room and the
+      // frames before the anchor exists would be wrong.
+      const undrifted = at(roomFromWorld(undefined, origin), world);
+      steps.push(check('the no-anchor fallback is exact', dist(undrifted, room) < 1e-6, `${dist(undrifted, room).toExponential(1)}m`));
+      steps.push(check('a malformed anchor falls back safely', dist(at(roomFromWorld([1, 2, 3], origin), world), room) < 1e-6, 'ignored, static origin used'));
+      // The identity anchor must agree with the scan-time origin exactly.
+      steps.push(check('an unrevised anchor matches the static origin', dist(at(roomFromWorld(atScan, origin), world), room) < 1e-6, 'agree to 1e-6'));
+      return steps;
+    },
+  },
+  {
+    id: 'calib-furnished',
+    title: 'Scanned furniture stays a physical obstacle',
+    milestone: 'M4',
+    gate: 'obstacles',
+    scene: sampleRoomFurnished,
+    run: async () => {
+      const steps: StepResult[] = [];
+      const { scene } = roomToSession(capture('furnished-room'), 'frame-1', sweep(360));
+      steps.push(check('the furnished capture keeps its objects', scene.design.objects.length === 3, `${scene.design.objects.length} objects`));
+      steps.push(check('measured and design start identical', scene.measured.objects.length === scene.design.objects.length, `${scene.measured.objects.length} measured, ${scene.design.objects.length} design`));
+
+      // Erasing a real object from the design must not erase it from the room. This is the
+      // physical-obstacle layer: the bed is still there even once the design forgets it.
+      const bed = scene.design.objects.find((o) => o.class === 'bed')!;
+      const erased: EditorState = {
+        ...scene,
+        design: { ...scene.design, objects: scene.design.objects.filter((o) => o.id !== bed.id) },
+      };
+      const stillBlocking = buildIndex(erased, '').neighbours.some((n) => n.id === bed.id);
+      steps.push(check('a design-erased object still blocks placement', stillBlocking, stillBlocking ? 'present as a measured obstacle' : 'vanished from the index'));
+
+      // Only an explicit physical removal clears it.
+      const removed: EditorState = { ...erased, removedPhysicalIds: [bed.id] };
+      const gone = !buildIndex(removed, '').neighbours.some((n) => n.id === bed.id);
+      steps.push(check('an explicitly removed object stops blocking', gone, gone ? 'cleared' : 'still blocking'));
+      return steps;
+    },
+  },
+  {
+    id: 'calib-inferred',
+    title: 'The unobserved wall is inferred, not measured',
+    milestone: 'M4',
+    gate: 'inferred',
+    scene: sampleRoomFurnished,
+    run: async () => {
+      const steps: StepResult[] = [];
+      // RoomPlan closes the room and reports four confident walls either way. Only coverage
+      // knows the user never faced one of them.
+      const blind = roomToSession(capture('empty-room'), 'frame-1');
+      steps.push(check('RoomPlan alone calls every wall measured', wallIds(blind.scene).every((id) => provenanceOf(blind.scene, id) === 'real'), wallIds(blind.scene).map((id) => provenanceOf(blind.scene, id)).join(',')));
+
+      const { scene, coverage } = roomToSession(capture('empty-room'), 'frame-1', sweep(270));
+      const inferred = wallIds(scene).filter((id) => provenanceOf(scene, id) === 'inferred');
+      steps.push(check('a 270 degree sweep leaves a wall unmeasured', inferred.length > 0, inferred.length ? `${inferred.join(', ')} inferred` : 'every wall claimed as measured'));
+      steps.push(check('the walls actually swept stay measured', inferred.length < wallIds(scene).length, `${wallIds(scene).length - inferred.length} of ${wallIds(scene).length} measured`));
+      steps.push(check('the shell as a whole is labelled inferred', scene.provenance === 'inferred', `provenance ${scene.provenance}`));
+      steps.push(check('observation is demoted too, not just the design', scene.measured.surfaces.some((s) => s.provenance === 'inferred'), 'measured surfaces carry the same provenance'));
+      steps.push(check('270 degrees is still accepted, not blocked', coverage?.status === 'ready', `status ${coverage?.status}`));
+      return steps;
+    },
+  },
+  {
+    id: 'calib-confidence',
+    title: 'RoomPlan low confidence becomes inferred',
+    milestone: 'M4',
+    gate: 'confidence',
+    scene: sampleRoomFurnished,
+    run: async () => {
+      const steps: StepResult[] = [];
+      // A full sweep, so coverage cannot be what demotes the wall.
+      const { scene } = roomToSession(capture('low-confidence-wall'), 'frame-1', sweep(360));
+      steps.push(check('a low-confidence wall is not called measured', provenanceOf(scene, 'wall-west') === 'inferred', `wall-west is ${provenanceOf(scene, 'wall-west')}`));
+      steps.push(check('confident walls are unaffected', provenanceOf(scene, 'wall-east') === 'real' && provenanceOf(scene, 'wall-north') === 'real', `east ${provenanceOf(scene, 'wall-east')}, north ${provenanceOf(scene, 'wall-north')}`));
+      steps.push(check('one doubtful surface makes the shell inferred', scene.provenance === 'inferred', `provenance ${scene.provenance}`));
+
+      // The floor fallback is the other source of inferred structure.
+      const derived = roomToSession(capture('no-floor'), 'frame-1', sweep(360));
+      steps.push(check('a missing floor is derived from the wall bases', derived.scene.design.surfaces.some((s) => s.class === 'floor' && s.provenance === 'inferred'), derived.scene.design.surfaces.filter((s) => s.class === 'floor').map((s) => `${s.id}:${s.provenance}`).join(' ')));
+      steps.push(check('the derived floor is the right size', Math.abs(derived.scene.design.bounds.area_m2 - 16) < 0.01, `${derived.scene.design.bounds.area_m2.toFixed(1)}m2`));
+      return steps;
+    },
+  },
+  {
+    id: 'calib-incomplete',
+    title: 'An incomplete sweep asks for the missing view',
+    milestone: 'M4',
+    gate: 'incomplete',
+    scene: sampleRoomFurnished,
+    run: async () => {
+      const steps: StepResult[] = [];
+      const { scene } = roomToSession(capture('empty-room'), 'frame-1');
+      const half = evaluateCoverage(scene, sweep(180));
+      steps.push(check('half a turn is not accepted as a room', half.status === 'needs_view', `status ${half.status}`));
+      steps.push(check('it names which boundary is missing', half.missing.length > 0 && !!half.prompt, half.prompt ?? 'no prompt'));
+      steps.push(check('the prompt names a direction, not an id', !!half.prompt && !half.prompt.includes('wall-'), half.prompt ?? ''));
+
+      const none = evaluateCoverage(scene, sweep(0));
+      steps.push(check('no sweep at all reports nothing observed', none.observedFraction === 0 && none.status === 'needs_view', `${(none.observedFraction * 100).toFixed(0)}% observed, ${none.status}`));
+
+      // Tracking quality is part of coverage, not a separate concern.
+      const degraded = evaluateCoverage(scene, sweep(360, 'limited'));
+      steps.push(check('a full turn under bad tracking does not count', degraded.status === 'needs_view', `status ${degraded.status}`));
+      steps.push(check('it says the problem was tracking, not aim', !!degraded.prompt && degraded.prompt.toLowerCase().includes('tracking'), degraded.prompt ?? ''));
+
+      const full = evaluateCoverage(scene, sweep(360));
+      steps.push(check('a good full turn is accepted', full.status === 'ready' && full.prompt === null, `status ${full.status}`));
+      return steps;
+    },
+  },
+  {
+    id: 'calib-recovery',
+    title: 'A failed capture explains itself',
+    milestone: 'M4',
+    gate: 'recovery',
+    scene: sampleRoomFurnished,
+    run: async () => {
+      const steps: StepResult[] = [];
+      let message = '';
+      try {
+        roomToSession(capture('two-walls'), 'frame-1', sweep(360));
+        message = '';
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      steps.push(check('too little geometry is refused', message.length > 0, message || 'accepted a two-wall room'));
+      steps.push(check('the refusal says what to do about it', /more room boundaries/i.test(message), message));
+
+      // Malformed input must fail the same way rather than producing a half-built room.
+      let malformed = '';
+      try {
+        roomToSession('{"id":"x","surfaces":[],"objects":[]}', 'frame-1');
+      } catch (error) {
+        malformed = error instanceof Error ? error.message : String(error);
+      }
+      steps.push(check('an empty capture is refused, not half-converted', malformed.length > 0, malformed));
+
+      // A good capture after a failure still works: nothing is left poisoned.
+      const recovered = roomToSession(capture('empty-room'), 'frame-1', sweep(360));
+      steps.push(check('a retry after failure converts normally', recovered.scene.design.surfaces.length > 0 && recovered.coverage?.status === 'ready', `${recovered.scene.design.surfaces.length} surfaces, ${recovered.coverage?.status}`));
       return steps;
     },
   },
