@@ -1,0 +1,32 @@
+{
+  "name": "reality-editor",
+  "private": true,
+  "version": "0.2.0",
+  "workspaces": [
+    "mobile",
+    "packages/*",
+    "server"
+  ],
+  "scripts": {
+    "dev": "npm run start --workspace @reality/mobile",
+    "server": "npm run dev --workspace reality-editor-server",
+    "typecheck": "tsc --noEmit && npm run typecheck --workspace @reality/mobile && npm run typecheck --workspace reality-editor-server",
+    "codegen": "bash contracts/codegen.sh"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3",
+    "tsx": "^4.19.2",
+    "@types/node": "^22.10.5"
+  },
+  "overrides": {
+    "react-native-gesture-handler": "~2.32.0"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dependencies": {
+    "expo": "~57.0.24",
+    "react": "19.2.3",
+    "react-native": "0.86.3"
+  }
+}

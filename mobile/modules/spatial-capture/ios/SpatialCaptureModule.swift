@@ -1,0 +1,681 @@
+import ExpoModulesCore
+import ARKit
+import RoomPlan
+import SceneKit
+import Vision
+import UIKit
+
+public class SpatialCaptureModule: Module {
+  public func definition() -> ModuleDefinition {
+    Name("SpatialCapture")
+    Function("isSupported") { RoomCaptureSession.isSupported }
+    View(SpatialCaptureView.self) {
+      Events("onRoom", "onFrame", "onStatus", "onKeyframe")
+      Prop("mode") { (view: SpatialCaptureView, mode: String) in view.setMode(mode) }
+    }
+  }
+}
+
+// SceneKit is used only for the native camera background. Editable content is
+// rendered by R3F. One ARSession survives measurement -> editing.
+final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewDelegate {
+  let onRoom = EventDispatcher()
+  let onFrame = EventDispatcher()
+  let onStatus = EventDispatcher()
+  /// Registered visual references, captured DURING the measurement sweep.
+  ///
+  /// Replaces a separate Vision Camera pass that turned the user through another
+  /// 300° and produced files nothing consumed — `captures.current` was read only
+  /// to render a count, and mobile/README.md says so outright: "their
+  /// registration into the measured frame is not implemented, so they are not
+  /// uploaded or falsely labeled as tracked keyframes".
+  ///
+  /// Taken from the retained ARSession, each keyframe carries the pose and
+  /// intrinsics of the frame it came from, so it is registered to the measured
+  /// room by construction rather than by a later solve.
+  let onKeyframe = EventDispatcher()
+  private let arSession = ARSession()
+  private let cameraView = ARSCNView(frame: .zero)
+  private var capture: RoomCaptureSession?
+  private var mode = "idle"
+  private var lastFrame: TimeInterval = 0
+  private let handQueue = DispatchQueue(label: "reality.hand", qos: .userInitiated)
+  private var processing = false
+  private lazy var handRequest: VNDetectHumanHandPoseRequest = {
+    let request = VNDetectHumanHandPoseRequest()
+    request.maximumHandCount = 1
+    return request
+  }()
+  private var lastHandSample: TimeInterval = -.infinity
+  private var handProcessed = 0
+  private var handDropped = 0
+  private var handActive = false
+  private var handStreak = 0
+  private var lastGoodHandTime: TimeInterval?
+  private var filteredHand: CGPoint?
+  private var lastFilterTime: TimeInterval?
+  private var pinching = false
+  private var pinchStreak = 0
+  private var generation = 0
+  private var frameId = UUID().uuidString
+  private var frameSequence = 0
+  private var interfaceOrientation: UIInterfaceOrientation = .portrait
+  private var viewportSize: CGSize = .zero
+  private var previousFrameTime: TimeInterval = 0
+  private var memoryWarnings = 0
+  private var memoryObserver: NSObjectProtocol?
+  private var scanWalls = 0
+  private var scanFloors = 0
+  private var scanYaw: Float?
+  private var scanDirection: Float = 0
+  /// Signed rotation seen before the sweep direction is committed.
+  ///
+  /// `scanDirection` used to latch on the FIRST frame whose delta exceeded
+  /// 0.001 rad — 0.057°, which is hand tremor, not intent. Latching the wrong
+  /// way made every subsequent real rotation negative, and `max(0, …)` below
+  /// clamped the total to zero permanently: the sweep read 0° however far the
+  /// user turned, and only `resetScanProgress()` could clear it. It was a coin
+  /// flip per run.
+  private var scanDirectionEvidence: Float = 0
+  /// ~7° of consistent rotation before committing. Far above tremor, far below
+  /// the 45° keyframe spacing.
+  private static let directionLatchRadians: Float = 0.12
+  private var scanDegrees: Float = 0
+  private var reportedScanBucket = -1
+
+  /// Six references across the 270° the sweep already requires, so the last one
+  /// lands at 225° and none depends on the user over-rotating.
+  private static let keyframeCount = 6
+  private static let keyframeSpacingDegrees: Float = 270 / Float(keyframeCount)
+  /// Its own queue and single-inflight flag, matching `handQueue`/`processing`.
+  /// JPEG encoding is far heavier than a Vision request, so it must never be
+  /// allowed to queue behind itself.
+  private let keyframeQueue = DispatchQueue(label: "reality.keyframe", qos: .utility)
+  private var keyframeEncoding = false
+  private var keyframesEmitted = 0
+  private var highResolutionCapture = false
+  private lazy var keyframeContext = CIContext(options: [.useSoftwareRenderer: false])
+
+  required init(appContext: AppContext? = nil) {
+    super.init(appContext: appContext)
+    cameraView.session = arSession
+    cameraView.delegate = self
+    cameraView.scene = SCNScene()
+    addSubview(cameraView)
+    memoryObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.didReceiveMemoryWarningNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.memoryWarnings += 1
+      self?.onStatus(["code": "memory_warning", "message": "iOS reported memory pressure."])
+    }
+  }
+  deinit {
+    if let memoryObserver { NotificationCenter.default.removeObserver(memoryObserver) }
+  }
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    cameraView.frame = bounds
+    viewportSize = bounds.size
+    interfaceOrientation = window?.windowScene?.interfaceOrientation ?? .portrait
+  }
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    if window == nil { stop() }
+  }
+  private func stop() {
+    generation += 1
+    capture?.stop(pauseARSession: true)
+    capture?.delegate = nil
+    capture = nil
+    arSession.pause()
+    mode = "idle"
+    processing = false
+    resetHandTracking()
+    onStatus(["code": "camera_owner", "message": "Spatial camera released."])
+  }
+  func setMode(_ next: String) {
+    guard next != mode else { return }
+    if next == "idle" { stop(); return }
+    guard RoomCaptureSession.isSupported else {
+      onStatus(["code": "unsupported", "message": "Room measurement requires a supported LiDAR iPhone."])
+      return
+    }
+    if next == "scan" {
+      generation += 1
+      frameId = UUID().uuidString
+      frameSequence = 0
+      previousFrameTime = 0
+      resetHandTracking()
+      resetScanProgress()
+      capture = RoomCaptureSession(arSession: arSession)
+      capture?.delegate = self
+      mode = next
+      onStatus(["code": "camera_transition", "message": "RoomPlan is requesting the rear camera."])
+      capture?.run(configuration: RoomCaptureSession.Configuration())
+    } else if next == "edit" {
+      if mode == "processing" { return }
+      finishRoomCapture(message: "Finishing the room and retaining its AR session for editing.")
+    }
+  }
+  func captureSession(_ session: RoomCaptureSession, didStartWith configuration: RoomCaptureSession.Configuration) {
+    // ROOMPLAN OWNS THE ARCONFIGURATION. `run(configuration:)` takes a
+    // RoomCaptureSession.Configuration — which carries only `isCoachingEnabled`
+    // — and RoomPlan runs the ARSession with a format of its own choosing. So
+    // the high-resolution video format cannot be requested; it can only be
+    // detected after the fact.
+    //
+    // `captureHighResolutionFrame` is safe to call on any format, but the
+    // header is explicit that some formats "do not support a significantly
+    // higher still image resolution than the streaming camera resolution".
+    // Reported in the status so the device gate can record which path ran
+    // rather than inferring it from image dimensions.
+    let recommended = session.arSession.configuration?.videoFormat
+      .isRecommendedForHighResolutionFrameCapturing ?? false
+    DispatchQueue.main.async {
+      guard self.mode == "scan" else { return }
+      self.highResolutionCapture = recommended
+      self.onStatus([
+        "code": "camera_owner",
+        "message": recommended
+          ? "RoomPlan acquired the rear camera. References will be full-resolution stills."
+          : "RoomPlan acquired the rear camera. References will come from the video stream.",
+        "highResolutionReferences": recommended,
+      ])
+    }
+  }
+  func captureSession(_ session: RoomCaptureSession, didProvide instruction: RoomCaptureSession.Instruction) {
+    let message: String
+    switch instruction {
+    case .normal: message = "Move slowly around the perimeter. Include every floor and ceiling edge."
+    case .moveCloseToWall: message = "Move closer to the wall while keeping its corners in view."
+    case .moveAwayFromWall: message = "Step back so the full wall and its edges are visible."
+    case .turnOnLight: message = "The room is too dark. Turn on more lights before continuing."
+    case .slowDown: message = "Move more slowly so tracking can keep up."
+    case .lowTexture: message = "Aim at a corner, doorway, or textured edge so tracking has a visual feature."
+    @unknown default: message = "Move slowly and keep room boundaries in view."
+    }
+    DispatchQueue.main.async { self.onStatus(["code": "guidance", "message": message]) }
+  }
+  func captureSession(_ session: RoomCaptureSession, didUpdate room: CapturedRoom) {
+    let walls = room.walls.count
+    let floors = room.floors.count
+    let openings = room.doors.count + room.openings.count
+    scanWalls = walls
+    scanFloors = floors
+    DispatchQueue.main.async {
+      if self.scanDegrees >= 270, walls >= 3 {
+        self.finishRoomCapture(message: "Room coverage complete. Building the room…")
+        return
+      }
+      let message = self.scanDegrees >= 270
+        ? "Rotation complete. Aim toward one more room boundary."
+        : "Observed \(walls) walls, \(floors) floor, and \(openings) openings. Keep turning steadily."
+      self.onStatus(["code": "observing",
+        "message": message,
+        "wallCount": walls, "floorCount": floors, "openingCount": openings])
+    }
+  }
+  func captureSession(_ session: RoomCaptureSession, didEndWith data: CapturedRoomData, error: Error?) {
+    guard mode == "processing" else { return }
+    let epoch = generation
+    if let error {
+      mode = "failed"
+      onStatus(["code": "failed", "message": "Room capture failed: \(error.localizedDescription)"])
+      return
+    }
+    Task {
+      do {
+        let room = try await RoomBuilder(options: []).capturedRoom(from: data)
+        let surfaces = room.walls.map { surface($0, kind: "wall") }
+          + room.floors.map { surface($0, kind: "floor") }
+          + room.doors.map { surface($0, kind: "door") }
+          + room.windows.map { surface($0, kind: "window") }
+          + room.openings.map { surface($0, kind: "opening") }
+        let objects: [[String: Any]] = room.objects.map { object in
+          ["id": object.identifier.uuidString, "category": String(describing: object.category),
+           "transform": array(object.transform), "dimensions": [object.dimensions.x, object.dimensions.y, object.dimensions.z]]
+        }
+        let encoded = try JSONSerialization.data(withJSONObject: ["id": room.identifier.uuidString, "surfaces": surfaces, "objects": objects])
+        let json = String(data: encoded, encoding: .utf8) ?? "{}"
+        await MainActor.run {
+          guard self.generation == epoch else { return }
+          self.mode = "edit"
+          self.onStatus(["code": "camera_owner", "message": "Tracked editing retained the RoomPlan AR session."])
+          self.onRoom(["roomJSON": json, "frameId": self.frameId])
+        }
+      } catch {
+        await MainActor.run {
+          self.mode = "failed"
+          self.onStatus(["code": "failed", "message": "Room processing failed: \(error.localizedDescription)"])
+        }
+      }
+    }
+  }
+  func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+    // ARSCNView owns frame scheduling, avoiding replacement of RoomPlan's ARSession delegate.
+    guard time - lastFrame > 1.0 / 20.0, let frame = arSession.currentFrame else { return }
+    lastFrame = time
+    let camera = frame.camera
+    let tracking: String
+    let trackingReason: String
+    switch camera.trackingState {
+    case .normal:
+      tracking = "normal"
+      trackingReason = "none"
+    case .notAvailable:
+      tracking = "lost"
+      trackingReason = "not_available"
+    case .limited(let reason):
+      tracking = "limited"
+      trackingReason = String(describing: reason)
+    }
+    frameSequence += 1
+    let sequence = frameSequence
+    let fps = previousFrameTime > 0 ? 1.0 / max(frame.timestamp - previousFrameTime, 0.0001) : 0
+    previousFrameTime = frame.timestamp
+    let epoch = generation
+    let orientation = interfaceOrientation
+    let size = viewportSize
+    let frameTimestamp = frame.timestamp
+    let worldMapping = worldMappingName(frame.worldMappingStatus)
+    let thermalState = thermalStateName(ProcessInfo.processInfo.thermalState)
+    let warningCount = memoryWarnings
+    DispatchQueue.main.async {
+      guard self.mode != "idle", self.generation == epoch, size.width > 0 else { return }
+      if self.mode == "scan" {
+        self.updateScanProgress(camera.transform)
+        self.captureKeyframeIfDue(frame: frame, orientation: orientation, epoch: epoch)
+      }
+      let view = camera.viewMatrix(for: orientation)
+      let projection = camera.projectionMatrix(for: orientation, viewportSize: size, zNear: 0.01, zFar: 100)
+      self.onFrame(["timestamp": frame.timestamp * 1000, "frameId": self.frameId, "tracking": tracking,
+        "trackingReason": trackingReason, "sequence": sequence, "fps": fps,
+        "viewportWidth": size.width, "viewportHeight": size.height,
+        "orientation": self.orientationName(orientation),
+        "worldMapping": worldMapping,
+        "thermalState": thermalState,
+        "memoryWarnings": warningCount,
+        "cameraToWorld": self.array(view.inverse), "projection": self.array(projection)])
+      if self.mode == "edit" && frameTimestamp - self.lastHandSample >= 1.0 / 12.0 {
+        if self.processing {
+          self.handDropped += 1
+          return
+        }
+        self.lastHandSample = frameTimestamp
+        self.processing = true
+        let pixelBuffer = frame.capturedImage
+        let visionOrientation = self.visionOrientation(orientation)
+        let displayTransform = frame.displayTransform(for: orientation, viewportSize: size)
+        self.handQueue.async {
+          var detection: HandDetection?
+          do {
+            try VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: visionOrientation)
+              .perform([self.handRequest])
+            if let hand = self.handRequest.results?.first,
+               let tip = try? hand.recognizedPoint(.indexTip) {
+              let oriented = CGPoint(x: tip.location.x, y: 1 - tip.location.y)
+              let raw = self.rawImagePoint(oriented, orientation: visionOrientation)
+              let display = raw.applying(displayTransform)
+              let confidence = Double(min(hand.confidence, tip.confidence))
+              var ratio: Double?
+              if let thumb = try? hand.recognizedPoint(.thumbTip),
+                 let wrist = try? hand.recognizedPoint(.wrist),
+                 let middle = try? hand.recognizedPoint(.middleMCP),
+                 min(thumb.confidence, wrist.confidence, middle.confidence) >= 0.3 {
+                let palm = hypot(wrist.location.x - middle.location.x,
+                                 wrist.location.y - middle.location.y)
+                if palm > 0.0001 {
+                  ratio = Double(hypot(thumb.location.x - tip.location.x,
+                                       thumb.location.y - tip.location.y) / palm)
+                }
+              }
+              detection = HandDetection(point: display, rawPoint: raw,
+                                        confidence: confidence, pinchRatio: ratio)
+            }
+          } catch {
+            DispatchQueue.main.async {
+              self.onStatus(["code": "hand_error", "message": "Hand tracking failed: \(error.localizedDescription)"])
+            }
+          }
+          DispatchQueue.main.async {
+            self.processing = false
+            guard self.generation == epoch else { return }
+            self.handProcessed += 1
+            var cursor = self.acceptHand(detection, timestamp: frameTimestamp)
+            cursor["latencyMs"] = max(0, (ProcessInfo.processInfo.systemUptime - frameTimestamp) * 1000)
+            self.onFrame(["timestamp": frameTimestamp * 1000, "frameId": self.frameId, "tracking": tracking,
+              "trackingReason": trackingReason, "sequence": sequence, "fps": fps,
+              "viewportWidth": size.width, "viewportHeight": size.height,
+              "orientation": self.orientationName(orientation),
+              "worldMapping": worldMapping,
+              "thermalState": thermalState,
+              "memoryWarnings": warningCount,
+              "cameraToWorld": self.array(view.inverse), "projection": self.array(projection),
+              "hand": cursor])
+          }
+        }
+      }
+    }
+  }
+  private func surface(_ surface: CapturedRoom.Surface, kind: String) -> [String: Any] {
+    var corners = surface.polygonCorners
+    if corners.isEmpty {
+      let w = surface.dimensions.x / 2, h = surface.dimensions.y / 2
+      // RoomPlan surface-local geometry is always in the XY plane. The
+      // surface transform rotates a floor into the horizontal world plane.
+      corners = [SIMD3(-w,-h,0), SIMD3(w,-h,0), SIMD3(w,h,0), SIMD3(-w,h,0)]
+    }
+    let polygon = corners.map { corner -> [Float] in
+      let world = surface.transform * SIMD4(corner.x, corner.y, corner.z, 1)
+      return [world.x, world.y, world.z]
+    }
+    return ["id": surface.identifier.uuidString, "kind": kind, "polygon": polygon,
+      "transform": array(surface.transform), "confidence": String(describing: surface.confidence)]
+  }
+  private func array(_ m: simd_float4x4) -> [Float] {
+    (0..<4).flatMap { c in (0..<4).map { r in m[c][r] } }
+  }
+  private func orientationName(_ orientation: UIInterfaceOrientation) -> String {
+    switch orientation {
+    case .portrait: return "portrait"
+    case .portraitUpsideDown: return "portrait_upside_down"
+    case .landscapeLeft: return "landscape_left"
+    case .landscapeRight: return "landscape_right"
+    default: return "unknown"
+    }
+  }
+
+  private func worldMappingName(_ status: ARFrame.WorldMappingStatus) -> String {
+    switch status {
+    case .notAvailable: return "not_available"
+    case .limited: return "limited"
+    case .extending: return "extending"
+    case .mapped: return "mapped"
+    @unknown default: return "unknown"
+    }
+  }
+
+  private func resetScanProgress() {
+    scanWalls = 0
+    scanFloors = 0
+    scanYaw = nil
+    scanDirection = 0
+    scanDirectionEvidence = 0
+    scanDegrees = 0
+    reportedScanBucket = -1
+    keyframesEmitted = 0
+    keyframeEncoding = false
+  }
+
+  /// Emits one registered keyframe each time the sweep passes a 45° threshold.
+  ///
+  /// Called from the main-thread block of the frame pump, so `scanDegrees` is
+  /// already current for this frame.
+  ///
+  /// The heavy work is moved off the main thread, but — unlike the hand path
+  /// above — the pixel buffer is NOT handed across threads. ARKit recycles
+  /// `capturedImage` from a small pool; a Vision request returns fast enough to
+  /// get away with it, a JPEG encode does not. `CIImage` is created here on the
+  /// main thread while the buffer is still guaranteed live, and only the
+  /// immutable image crosses the queue boundary.
+  private func captureKeyframeIfDue(frame: ARFrame, orientation: UIInterfaceOrientation, epoch: Int) {
+    guard keyframesEmitted < Self.keyframeCount, !keyframeEncoding else { return }
+    // Threshold for the NEXT one: 0°, 45°, 90° ... 225°.
+    guard scanDegrees >= Float(keyframesEmitted) * Self.keyframeSpacingDegrees else { return }
+
+    keyframeEncoding = true
+    let index = keyframesEmitted
+    keyframesEmitted += 1
+
+    // A full-resolution still if the session can give one, otherwise the
+    // streaming frame. Both carry the same pose and intrinsics, so both are
+    // registered; only sharpness differs.
+    if highResolutionCapture {
+      arSession.captureHighResolutionFrame { [weak self] captured, _ in
+        guard let self else { return }
+        // Falling back to `frame` rather than failing: a missed still would
+        // leave a permanent gap in the sweep, and the streaming frame is a
+        // usable reference.
+        self.encodeKeyframe(captured ?? frame, orientation: orientation, epoch: epoch, index: index)
+      }
+    } else {
+      encodeKeyframe(frame, orientation: orientation, epoch: epoch, index: index)
+    }
+  }
+
+  private func encodeKeyframe(_ frame: ARFrame, orientation: UIInterfaceOrientation,
+                              epoch: Int, index: Int) {
+    let camera = frame.camera
+    let resolution = camera.imageResolution
+    let intrinsics = camera.intrinsics
+    let cameraToWorld = array(camera.viewMatrix(for: orientation).inverse)
+    let identifier = UUID().uuidString
+    let timestamp = frame.timestamp * 1000
+    let currentFrameId = frameId
+    // Created here, while ARKit still owns a live buffer.
+    let image = CIImage(cvPixelBuffer: frame.capturedImage)
+
+    keyframeQueue.async { [weak self] in
+      guard let self else { return }
+      let data = self.keyframeContext.jpegRepresentation(
+        of: image,
+        colorSpace: CGColorSpaceCreateDeviceRGB(),
+        options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.8])
+
+      DispatchQueue.main.async {
+        self.keyframeEncoding = false
+        // The sweep may have been restarted or torn down mid-encode.
+        guard self.generation == epoch, let data else {
+          if self.generation == epoch { self.keyframesEmitted = index }
+          return
+        }
+        // `KeyframeSchema` is `.strict()`: these keys and no others. The server
+        // additionally rejects whitespace and base64url, so the default
+        // `base64EncodedString()` alphabet is what it wants.
+        self.onKeyframe([
+          "id": identifier,
+          "timestamp": timestamp,
+          "width": Int(resolution.width),
+          "height": Int(resolution.height),
+          "frameId": currentFrameId,
+          "cameraToWorld": cameraToWorld,
+          "intrinsics": self.array(intrinsics),
+          "jpegBase64": data.base64EncodedString(),
+        ])
+      }
+    }
+  }
+
+  /// Column-major, matching `array(_ m: simd_float4x4)` and Three.js.
+  private func array(_ m: simd_float3x3) -> [Float] {
+    (0..<3).flatMap { c in (0..<3).map { r in m[c][r] } }
+  }
+
+  private func updateScanProgress(_ transform: simd_float4x4) {
+    let forward = SIMD2<Float>(-transform.columns.2.x, -transform.columns.2.z)
+    guard simd_length(forward) > 0.35 else { return }
+    let yaw = atan2(forward.x, forward.y)
+    guard let previous = scanYaw else {
+      scanYaw = yaw
+      return
+    }
+    scanYaw = yaw
+    let delta = atan2(sin(yaw - previous), cos(yaw - previous))
+    guard abs(delta) < 0.35, abs(delta) > 0.001 else { return }
+
+    if scanDirection == 0 {
+      // Sum until the intent is unambiguous, rather than trusting one sample.
+      scanDirectionEvidence += delta
+      guard abs(scanDirectionEvidence) >= Self.directionLatchRadians else { return }
+      scanDirection = scanDirectionEvidence >= 0 ? 1 : -1
+      // Credit the rotation already gathered so the first ~7° is not thrown away.
+      scanDegrees = abs(scanDirectionEvidence) * 180 / .pi
+    } else {
+      let directed = delta * scanDirection
+      scanDegrees = min(360, max(0, scanDegrees + directed * 180 / .pi))
+    }
+    let bucket = Int(scanDegrees / 10)
+    if bucket != reportedScanBucket {
+      reportedScanBucket = bucket
+      let progress = min(scanDegrees, 270)
+      let message = scanDegrees >= 270
+        ? "Rotation complete. Aim toward any room boundary not yet detected."
+        : "Room measurement: \(Int(progress))° / 270°. Turn steadily in one direction."
+      onStatus(["code": "scan_progress",
+        "message": message,
+        "scanDegrees": scanDegrees, "wallCount": scanWalls, "floorCount": scanFloors])
+    }
+    if scanDegrees >= 270, scanWalls >= 3 {
+      finishRoomCapture(message: "Room coverage complete. Building the room…")
+    }
+  }
+
+  private func finishRoomCapture(message: String) {
+    guard mode == "scan" else { return }
+    mode = "processing"
+    onStatus(["code": "scan_complete", "message": message, "scanDegrees": scanDegrees,
+      "wallCount": scanWalls, "floorCount": scanFloors])
+    capture?.stop(pauseARSession: false)
+  }
+
+  private func thermalStateName(_ state: ProcessInfo.ThermalState) -> String {
+    switch state {
+    case .nominal: return "nominal"
+    case .fair: return "fair"
+    case .serious: return "serious"
+    case .critical: return "critical"
+    @unknown default: return "unknown"
+    }
+  }
+
+  private struct HandDetection {
+    let point: CGPoint
+    let rawPoint: CGPoint
+    let confidence: Double
+    let pinchRatio: Double?
+  }
+
+  private func resetHandTracking() {
+    processing = false
+    lastHandSample = -.infinity
+    handProcessed = 0
+    handDropped = 0
+    handActive = false
+    handStreak = 0
+    lastGoodHandTime = nil
+    filteredHand = nil
+    lastFilterTime = nil
+    pinching = false
+    pinchStreak = 0
+  }
+
+  private func acceptHand(_ detection: HandDetection?, timestamp: TimeInterval) -> [String: Any] {
+    let inside = detection.map {
+      (0...1).contains($0.point.x) && (0...1).contains($0.point.y)
+    } ?? false
+    let usable = inside ? detection : nil
+
+    if handActive {
+      if let usable, usable.confidence >= 0.35 {
+        lastGoodHandTime = timestamp
+        filteredHand = smooth(usable.point, timestamp: timestamp)
+      } else if lastGoodHandTime.map({ timestamp - $0 > 0.35 }) ?? true {
+        handActive = false
+        handStreak = 0
+        filteredHand = nil
+        lastFilterTime = nil
+      }
+    } else if let usable, usable.confidence >= 0.6 {
+      handStreak += 1
+      if handStreak >= 2 {
+        handActive = true
+        lastGoodHandTime = timestamp
+        filteredHand = usable.point
+        lastFilterTime = timestamp
+      }
+    } else {
+      handStreak = 0
+    }
+
+    if let ratio = usable?.pinchRatio, usable?.confidence ?? 0 >= 0.4 {
+      if pinching {
+        if ratio > 0.55 { pinching = false; pinchStreak = 0 }
+      } else if ratio < 0.35 {
+        pinchStreak += 1
+        if pinchStreak >= 2 { pinching = true }
+      } else {
+        pinchStreak = 0
+      }
+    } else {
+      pinching = false
+      pinchStreak = 0
+    }
+
+    var result: [String: Any] = [
+      "visible": handActive,
+      "pinching": pinching,
+      "confidence": usable?.confidence ?? 0,
+      "pinchRatio": usable?.pinchRatio ?? -1,
+      "processed": handProcessed,
+      "dropped": handDropped,
+      "latencyMs": 0,
+    ]
+    if let raw = usable?.rawPoint {
+      result["rawX"] = raw.x
+      result["rawY"] = raw.y
+    }
+    if handActive, let point = filteredHand {
+      result["x"] = point.x
+      result["y"] = point.y
+    }
+    return result
+  }
+
+  private func smooth(_ point: CGPoint, timestamp: TimeInterval) -> CGPoint {
+    guard let previous = filteredHand, let previousTime = lastFilterTime else {
+      lastFilterTime = timestamp
+      return point
+    }
+    let dt = timestamp - previousTime
+    guard dt > 0, dt < 1 else {
+      lastFilterTime = timestamp
+      return point
+    }
+    let speed = hypot(point.x - previous.x, point.y - previous.y) / dt
+    let cutoff = 0.8 + 3.0 * speed
+    let tau = 1.0 / (2.0 * Double.pi * cutoff)
+    let alpha = dt / (dt + tau)
+    lastFilterTime = timestamp
+    return CGPoint(x: previous.x + alpha * (point.x - previous.x),
+                   y: previous.y + alpha * (point.y - previous.y))
+  }
+
+  private func visionOrientation(_ orientation: UIInterfaceOrientation) -> CGImagePropertyOrientation {
+    switch orientation {
+    case .portrait: return .right
+    case .portraitUpsideDown: return .left
+    case .landscapeLeft: return .up
+    case .landscapeRight: return .down
+    default: return .right
+    }
+  }
+
+  /// Vision returns points in the EXIF-oriented image. ARFrame's display
+  /// transform expects points in the captured buffer's native image space.
+  private func rawImagePoint(_ point: CGPoint,
+                             orientation: CGImagePropertyOrientation) -> CGPoint {
+    switch orientation {
+    case .up: return point
+    case .down: return CGPoint(x: 1 - point.x, y: 1 - point.y)
+    case .right: return CGPoint(x: point.y, y: 1 - point.x)
+    case .left: return CGPoint(x: 1 - point.y, y: point.x)
+    case .upMirrored: return CGPoint(x: 1 - point.x, y: point.y)
+    case .downMirrored: return CGPoint(x: point.x, y: 1 - point.y)
+    case .rightMirrored: return CGPoint(x: 1 - point.y, y: 1 - point.x)
+    case .leftMirrored: return CGPoint(x: point.y, y: point.x)
+    @unknown default: return point
+    }
+  }
+}

@@ -1,0 +1,28 @@
+.DS_Store
+
+# Xcode leftovers. SpatialCore is a SwiftPM package; `.build/` is its output.
+ios/*.xcodeproj/
+ios/*.xcworkspace/
+.build/
+DerivedData/
+*.xcuserdatad
+xcuserdata/
+
+node_modules/
+.env
+*.log
+
+__pycache__/
+*.pyc
+
+# LaMa (diminished-reality eraser's optional learned fill), 187MB. Fetched by
+# tools/fetch_lama.py, not committed — see that script's doc comment. Served
+# by the server's /assets route rather than bundled.
+models/LaMa.mlmodelc/
+
+# Expo generated projects and session artifacts
+mobile/.expo/
+mobile/ios/
+mobile/android/
+mobile/dist/
+server/.sessions/

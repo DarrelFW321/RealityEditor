@@ -1,0 +1,362 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "op.schema.json",
+  "title": "Op",
+  "description": "FROZEN INTERFACE #2a \u2014 a single validated mutation of the RSG.\n\nThe model emits INTENT: {target, relation, anchor}. It never emits coordinates, because it cannot see. The client's solver turns intent into a pose, writes the result into `constraint_report`, and hands that back so the model can narrate what actually happened.\n\nEvery op carries its own `inverse`. That is what makes undo exact rather than approximate: UNDO is not a recomputation, it is the replay of a pre-computed op.\n\nIdempotency: `op_id` is a client-generated ULID. Applying the same op_id twice is a no-op, so a duplicated tool call from the model cannot double-move anything.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "op_id",
+    "seq",
+    "branch_id",
+    "type",
+    "target_ids",
+    "params",
+    "inverse",
+    "caused_by",
+    "constraint_report",
+    "client_ts",
+    "applied_ts"
+  ],
+  "properties": {
+    "op_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "ULID, generated on the client. Lexicographically sortable by creation time. Idempotency key."
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic within `branch_id`, starting at 0. A gap means a dropped op \u2014 the client should refuse to apply and resync."
+    },
+    "branch_id": {
+      "type": "string",
+      "description": "Op log branch. Undoing past a fork point and editing again starts a new branch instead of destroying history."
+    },
+    "type": {
+      "$ref": "#/definitions/OpType"
+    },
+    "target_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Entity ids this op mutates. Validated against live RSG ids BEFORE apply \u2014 any unknown id drops the whole op client-side. This is the hallucination guard."
+    },
+    "params": {
+      "$ref": "#/definitions/OpParams"
+    },
+    "inverse": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/OpCore"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The op that exactly reverses this one. Computed by the applier at apply time, never by the model. Null ONLY for type=UNDO (undoing an undo is a redo, which is a new op against the branch). An OpCore rather than a full Op because an inverse needs no envelope \u2014 applying it mints a fresh op_id, seq, and its own inverse."
+    },
+    "caused_by": {
+      "$ref": "#/definitions/CausedBy"
+    },
+    "constraint_report": {
+      "anyOf": [
+        {
+          "$ref": "constraint_report.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Filled in by the solver at apply time. Null on an op that has been created but not yet applied."
+    },
+    "client_ts": {
+      "type": "number",
+      "description": "Epoch milliseconds when the client minted the op. Together with applied_ts this is the on-device half of the sub-1.2s budget."
+    },
+    "applied_ts": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Epoch milliseconds when the op landed in the graph. Null until applied."
+    }
+  },
+  "definitions": {
+    "OpType": {
+      "title": "OpType",
+      "type": "string",
+      "enum": [
+        "MOVE_OBJECT",
+        "ROTATE_OBJECT",
+        "RESIZE_OBJECT",
+        "DELETE_OBJECT",
+        "ADD_OBJECT",
+        "REPLACE_OBJECT",
+        "CHANGE_MATERIAL",
+        "CHANGE_COLOR",
+        "APPLY_STYLE",
+        "MODIFY_WALL",
+        "MODIFY_FLOOR",
+        "UNDO"
+      ]
+    },
+    "OpCore": {
+      "title": "OpCore",
+      "description": "The applicable payload of an op with no envelope: enough to mutate the graph, not enough to log. Used for `inverse`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "target_ids",
+        "params"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/definitions/OpType"
+        },
+        "target_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "params": {
+          "$ref": "#/definitions/OpParams"
+        }
+      }
+    },
+    "PlacementRelation": {
+      "title": "PlacementRelation",
+      "description": "How the target should sit relative to `anchor_id`. This is the model's entire vocabulary for position \u2014 it has no others.",
+      "type": "string",
+      "enum": [
+        "against_wall",
+        "under",
+        "on_top_of",
+        "beside",
+        "in_front_of",
+        "behind",
+        "centered_in",
+        "facing",
+        "away_from",
+        "absolute"
+      ]
+    },
+    "OpParams": {
+      "title": "OpParams",
+      "description": "Union of every op type's parameters, flattened. Every field is nullable and each is meaningful for only some `type` values \u2014 the table below is the contract. A field set for the wrong type is ignored by the applier, not an error.\n\nMOVE_OBJECT      relation, anchor_id, side, offset_m, position (relation=absolute only)\nROTATE_OBJECT    yaw, yaw_delta, face_anchor_id\nRESIZE_OBJECT    dimensions, scale\nDELETE_OBJECT    (none; the inverse carries `object`)\nADD_OBJECT       object OR catalog_id, plus relation/anchor_id for placement\nREPLACE_OBJECT   catalog_id, keep_pose\nCHANGE_MATERIAL  material_ref\nCHANGE_COLOR     color_hex\nAPPLY_STYLE      theme, style_batch_id\nMODIFY_WALL      surface_state, material_ref, surface (inverse only)\nMODIFY_FLOOR     surface_state, material_ref, surface (inverse only)\nUNDO             undo_op_id",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "relation": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PlacementRelation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "anchor_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Entity the relation is measured against. Validated against live RSG ids like target_ids."
+        },
+        "side": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "left",
+            "right",
+            "front",
+            "back",
+            "north",
+            "south",
+            "east",
+            "west",
+            null
+          ],
+          "description": "Disambiguates `beside`. Left/right are from the CAMERA's point of view at utterance time, resolved on-device before the op is built.",
+          "title": "PlacementSide"
+        },
+        "offset_m": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Requested gap for `beside` / `in_front_of`. The solver may grow this to satisfy clearances; it may not shrink it below 0."
+        },
+        "position": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "Room-space [x,y,z]. ONLY valid with relation=absolute, which only the client and the style planner emit \u2014 never the voice model."
+        },
+        "yaw": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Absolute yaw, radians."
+        },
+        "yaw_delta": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Relative yaw, radians. Mutually exclusive with `yaw`."
+        },
+        "face_anchor_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Rotate so the object's front faces this entity. Resolved to an absolute yaw by the solver."
+        },
+        "dimensions": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "scale": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "object": {
+          "anyOf": [
+            {
+              "$ref": "rsg.schema.json#/definitions/SceneObject"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Full object snapshot. Set on ADD_OBJECT, and on the inverse of DELETE_OBJECT \u2014 this is how a delete is undone exactly rather than re-derived."
+        },
+        "surface": {
+          "anyOf": [
+            {
+              "$ref": "rsg.schema.json#/definitions/Surface"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Full surface snapshot, for the inverse of MODIFY_WALL / MODIFY_FLOOR."
+        },
+        "catalog_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Key into catalog/manifest.json. The asset is already in the app bundle; nothing is fetched."
+        },
+        "keep_pose": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "REPLACE_OBJECT: reuse the old object's pose instead of re-solving. Default true."
+        },
+        "material_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "color_hex": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "theme": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Free text handed to /plan_style, e.g. 'scandinavian'."
+        },
+        "style_batch_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Groups the <=12 ops one APPLY_STYLE expanded into, so a single undo reverses the whole theme."
+        },
+        "surface_state": {
+          "anyOf": [
+            {
+              "$ref": "rsg.schema.json#/definitions/EntityState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "undo_op_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "UNDO: the op_id being reversed. The applier looks it up and applies its stored `inverse`."
+        }
+      }
+    },
+    "CausedBy": {
+      "title": "CausedBy",
+      "description": "Provenance. Every op traces to something a human did \u2014 this is what makes the session recorder diffable when a turn misfires once in ten runs.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "utterance_id",
+        "transcript",
+        "source"
+      ],
+      "properties": {
+        "utterance_id": {
+          "type": "string",
+          "description": "Groups ops from one turn. Ops sharing an utterance_id undo together."
+        },
+        "transcript": {
+          "type": "string",
+          "description": "What the user actually said, verbatim. Empty string for non-voice sources."
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "voice",
+            "tap",
+            "style_planner",
+            "system"
+          ],
+          "title": "OpSource"
+        }
+      }
+    }
+  }
+}

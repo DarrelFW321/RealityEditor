@@ -1,0 +1,582 @@
+{
+  "bounds": {
+    "area_m2": 16.0,
+    "ceiling_height": 2.5,
+    "floor_polygon": [
+      [
+        -2.0,
+        2.0
+      ],
+      [
+        2.0,
+        2.0
+      ],
+      [
+        2.0,
+        -2.0
+      ],
+      [
+        -2.0,
+        -2.0
+      ]
+    ]
+  },
+  "frame": {
+    "units": "m",
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "world_transform": [
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1
+    ]
+  },
+  "lighting": {
+    "ambient_cct": 4200.0,
+    "intensity": 850.0,
+    "preset": "measured"
+  },
+  "objects": [
+    {
+      "asset_ref": "cat_bed_queen_01",
+      "class": "bed",
+      "dimensions": [
+        1.53,
+        0.6,
+        2.03
+      ],
+      "id": "obj_bed_01",
+      "material_ref": "mat_linen_oat",
+      "movable": true,
+      "pivot": "base_center",
+      "pose": {
+        "position": [
+          -0.985,
+          0.0,
+          -0.985
+        ],
+        "yaw": 4.7124
+      },
+      "provenance": "real",
+      "refined_class": "queen bed",
+      "salience": 0.9,
+      "state": "present"
+    },
+    {
+      "asset_ref": "cat_desk_oak_01",
+      "class": "table",
+      "dimensions": [
+        1.2,
+        0.75,
+        0.6
+      ],
+      "id": "obj_table_01",
+      "material_ref": "mat_oak_light",
+      "movable": true,
+      "pivot": "base_center",
+      "pose": {
+        "position": [
+          1.7,
+          0.0,
+          -1.0
+        ],
+        "yaw": 1.5708
+      },
+      "provenance": "real",
+      "refined_class": "writing desk",
+      "salience": 0.5,
+      "state": "present"
+    },
+    {
+      "asset_ref": "cat_chair_felt_01",
+      "class": "chair",
+      "dimensions": [
+        0.5,
+        0.9,
+        0.5
+      ],
+      "id": "obj_chair_01",
+      "material_ref": "mat_felt_grey",
+      "movable": true,
+      "pivot": "base_center",
+      "pose": {
+        "position": [
+          0.75,
+          0.0,
+          -1.0
+        ],
+        "yaw": 4.7124
+      },
+      "provenance": "real",
+      "refined_class": "desk chair",
+      "salience": 0.4,
+      "state": "present"
+    }
+  ],
+  "occupancy": {
+    "grid_rle": [
+      340,
+      21,
+      39,
+      41,
+      39,
+      41,
+      39,
+      41,
+      33,
+      47,
+      26,
+      54,
+      26,
+      54,
+      26,
+      54,
+      26,
+      54,
+      26,
+      54,
+      26,
+      54,
+      14,
+      5,
+      7,
+      54,
+      8,
+      11,
+      7,
+      54,
+      8,
+      11,
+      7,
+      54,
+      8,
+      11,
+      7,
+      54,
+      8,
+      11,
+      7,
+      54,
+      8,
+      11,
+      7,
+      54,
+      9,
+      11,
+      7,
+      53,
+      9,
+      11,
+      7,
+      53,
+      9,
+      11,
+      7,
+      53,
+      9,
+      11,
+      7,
+      53,
+      9,
+      11,
+      7,
+      53,
+      9,
+      5,
+      13,
+      53,
+      27,
+      53,
+      27,
+      53,
+      27,
+      53,
+      27,
+      53,
+      27,
+      53,
+      27,
+      53,
+      27,
+      6,
+      6,
+      41,
+      39,
+      41,
+      39,
+      41,
+      3559
+    ],
+    "origin": [
+      -1.975,
+      -1.975
+    ],
+    "resolution_m": 0.05,
+    "size": [
+      80,
+      80
+    ]
+  },
+  "relations": [
+    {
+      "distance": 0.0,
+      "object": "srf_wall_west",
+      "predicate": "against_wall",
+      "subject": "obj_bed_01"
+    },
+    {
+      "distance": 0.4,
+      "object": "obj_table_01",
+      "predicate": "adjacent_to",
+      "subject": "obj_chair_01"
+    },
+    {
+      "distance": 0.4,
+      "object": "obj_table_01",
+      "predicate": "in_front_of",
+      "subject": "obj_chair_01"
+    },
+    {
+      "distance": 0.0,
+      "object": "srf_wall_east",
+      "predicate": "against_wall",
+      "subject": "obj_table_01"
+    }
+  ],
+  "room_id": "01J8X4Q2K7B9N3M5P6R8T0V2W4",
+  "surfaces": [
+    {
+      "class": "wall",
+      "id": "srf_wall_north",
+      "material_ref": "mat_paint_warm_white",
+      "parent": null,
+      "plane": {
+        "normal": [
+          0,
+          0,
+          1
+        ],
+        "offset": -2.0
+      },
+      "polygon": [
+        [
+          -2.0,
+          0,
+          -2.0
+        ],
+        [
+          2.0,
+          0,
+          -2.0
+        ],
+        [
+          2.0,
+          2.5,
+          -2.0
+        ],
+        [
+          -2.0,
+          2.5,
+          -2.0
+        ]
+      ],
+      "provenance": "real",
+      "state": "present",
+      "swing": null
+    },
+    {
+      "class": "wall",
+      "id": "srf_wall_south",
+      "material_ref": "mat_paint_warm_white",
+      "parent": null,
+      "plane": {
+        "normal": [
+          0,
+          0,
+          -1
+        ],
+        "offset": -2.0
+      },
+      "polygon": [
+        [
+          2.0,
+          0,
+          2.0
+        ],
+        [
+          -2.0,
+          0,
+          2.0
+        ],
+        [
+          -2.0,
+          2.5,
+          2.0
+        ],
+        [
+          2.0,
+          2.5,
+          2.0
+        ]
+      ],
+      "provenance": "real",
+      "state": "present",
+      "swing": null
+    },
+    {
+      "class": "wall",
+      "id": "srf_wall_east",
+      "material_ref": "mat_paint_warm_white",
+      "parent": null,
+      "plane": {
+        "normal": [
+          -1,
+          0,
+          0
+        ],
+        "offset": -2.0
+      },
+      "polygon": [
+        [
+          2.0,
+          0,
+          -2.0
+        ],
+        [
+          2.0,
+          0,
+          2.0
+        ],
+        [
+          2.0,
+          2.5,
+          2.0
+        ],
+        [
+          2.0,
+          2.5,
+          -2.0
+        ]
+      ],
+      "provenance": "real",
+      "state": "present",
+      "swing": null
+    },
+    {
+      "class": "wall",
+      "id": "srf_wall_west",
+      "material_ref": "mat_paint_warm_white",
+      "parent": null,
+      "plane": {
+        "normal": [
+          1,
+          0,
+          0
+        ],
+        "offset": -2.0
+      },
+      "polygon": [
+        [
+          -2.0,
+          0,
+          2.0
+        ],
+        [
+          -2.0,
+          0,
+          -2.0
+        ],
+        [
+          -2.0,
+          2.5,
+          -2.0
+        ],
+        [
+          -2.0,
+          2.5,
+          2.0
+        ]
+      ],
+      "provenance": "real",
+      "state": "present",
+      "swing": null
+    },
+    {
+      "class": "floor",
+      "id": "srf_floor",
+      "material_ref": "mat_oak_floor",
+      "parent": null,
+      "plane": {
+        "normal": [
+          0,
+          1,
+          0
+        ],
+        "offset": 0.0
+      },
+      "polygon": [
+        [
+          -2.0,
+          0,
+          2.0
+        ],
+        [
+          2.0,
+          0,
+          2.0
+        ],
+        [
+          2.0,
+          0,
+          -2.0
+        ],
+        [
+          -2.0,
+          0,
+          -2.0
+        ]
+      ],
+      "provenance": "real",
+      "state": "present",
+      "swing": null
+    },
+    {
+      "class": "ceiling",
+      "id": "srf_ceiling",
+      "material_ref": "mat_paint_ceiling",
+      "parent": null,
+      "plane": {
+        "normal": [
+          0,
+          -1,
+          0
+        ],
+        "offset": -2.5
+      },
+      "polygon": [
+        [
+          -2.0,
+          2.5,
+          -2.0
+        ],
+        [
+          2.0,
+          2.5,
+          -2.0
+        ],
+        [
+          2.0,
+          2.5,
+          2.0
+        ],
+        [
+          -2.0,
+          2.5,
+          2.0
+        ]
+      ],
+      "provenance": "real",
+      "state": "present",
+      "swing": null
+    },
+    {
+      "class": "window",
+      "id": "srf_window_north",
+      "material_ref": "mat_glass_clear",
+      "parent": "srf_wall_north",
+      "plane": {
+        "normal": [
+          0,
+          0,
+          1
+        ],
+        "offset": -2.0
+      },
+      "polygon": [
+        [
+          -0.7,
+          0.9,
+          -2.0
+        ],
+        [
+          0.7,
+          0.9,
+          -2.0
+        ],
+        [
+          0.7,
+          2.1,
+          -2.0
+        ],
+        [
+          -0.7,
+          2.1,
+          -2.0
+        ]
+      ],
+      "provenance": "real",
+      "state": "present",
+      "swing": null
+    },
+    {
+      "class": "door",
+      "id": "srf_door_east",
+      "material_ref": "mat_paint_door",
+      "parent": "srf_wall_east",
+      "plane": {
+        "normal": [
+          -1,
+          0,
+          0
+        ],
+        "offset": -2.0
+      },
+      "polygon": [
+        [
+          2.0,
+          0,
+          0.07
+        ],
+        [
+          2.0,
+          0,
+          0.93
+        ],
+        [
+          2.0,
+          2.03,
+          0.93
+        ],
+        [
+          2.0,
+          2.03,
+          0.07
+        ]
+      ],
+      "provenance": "real",
+      "state": "present",
+      "swing": {
+        "arc_radius": 0.86,
+        "direction": "inward",
+        "hinge": "left"
+      }
+    }
+  ],
+  "version": 0
+}

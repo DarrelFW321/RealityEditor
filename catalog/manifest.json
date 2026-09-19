@@ -1,0 +1,843 @@
+{
+  "version": 1,
+  "materials": [
+    {
+      "id": "mat_paint_warm_white",
+      "style_tags": [
+        "neutral",
+        "scandinavian",
+        "japandi"
+      ],
+      "base_color_hex": "#f2ede4"
+    },
+    {
+      "id": "mat_paint_chalk",
+      "style_tags": [
+        "scandinavian",
+        "minimal"
+      ],
+      "base_color_hex": "#eceae5"
+    },
+    {
+      "id": "mat_paint_ceiling",
+      "style_tags": [
+        "neutral"
+      ],
+      "base_color_hex": "#fbfaf8"
+    },
+    {
+      "id": "mat_paint_door",
+      "style_tags": [
+        "neutral"
+      ],
+      "base_color_hex": "#e8e4dc"
+    },
+    {
+      "id": "mat_oak_floor",
+      "style_tags": [
+        "warm",
+        "midcentury"
+      ],
+      "base_color_hex": "#b08653"
+    },
+    {
+      "id": "mat_ash_pale",
+      "style_tags": [
+        "scandinavian",
+        "minimal"
+      ],
+      "base_color_hex": "#d9cbb4"
+    },
+    {
+      "id": "mat_oak_light",
+      "style_tags": [
+        "scandinavian",
+        "midcentury"
+      ],
+      "base_color_hex": "#c9a877"
+    },
+    {
+      "id": "mat_linen_oat",
+      "style_tags": [
+        "scandinavian",
+        "japandi",
+        "warm"
+      ],
+      "base_color_hex": "#ded5c4"
+    },
+    {
+      "id": "mat_felt_grey",
+      "style_tags": [
+        "minimal",
+        "industrial"
+      ],
+      "base_color_hex": "#8d8f8c"
+    },
+    {
+      "id": "mat_boucle_cream",
+      "style_tags": [
+        "scandinavian",
+        "soft"
+      ],
+      "base_color_hex": "#e6dfd2"
+    },
+    {
+      "id": "mat_walnut_dark",
+      "style_tags": [
+        "midcentury",
+        "warm"
+      ],
+      "base_color_hex": "#5b4433"
+    },
+    {
+      "id": "mat_glass_clear",
+      "style_tags": [
+        "neutral"
+      ],
+      "base_color_hex": "#dfe7ea"
+    }
+  ],
+  "entries": [
+    {
+      "id": "cat_bed_queen_01",
+      "class": "bed",
+      "style_tags": [
+        "classic",
+        "vintage",
+        "traditional"
+      ],
+      "dims_m": {
+        "w": 1.49,
+        "h": 1.53,
+        "d": 2.04
+      },
+      "usdz_file": "usdz/bed_queen_01.usdz",
+      "poly_count": 18741,
+      "variants": [
+        "mat_linen_oat",
+        "mat_boucle_cream"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "GothicBed_01",
+        "url": "https://polyhaven.com/a/GothicBed_01",
+        "license": "CC0",
+        "authors": [
+          "Kirill Sannikov"
+        ]
+      }
+    },
+    {
+      "id": "cat_chair_dining_oak_01",
+      "class": "chair",
+      "style_tags": [
+        "farmhouse",
+        "scandinavian",
+        "painted"
+      ],
+      "dims_m": {
+        "w": 0.43,
+        "h": 0.96,
+        "d": 0.54
+      },
+      "usdz_file": "usdz/chair_dining_oak_01.usdz",
+      "poly_count": 724,
+      "variants": [
+        "mat_oak_light",
+        "mat_walnut_dark"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "painted_wooden_chair_01",
+        "url": "https://polyhaven.com/a/painted_wooden_chair_01",
+        "license": "CC0",
+        "authors": [
+          "Kuutti Siitonen"
+        ]
+      }
+    },
+    {
+      "id": "cat_chair_dining_leather_01",
+      "class": "chair",
+      "style_tags": [
+        "modern",
+        "minimal",
+        "leather"
+      ],
+      "dims_m": {
+        "w": 0.43,
+        "h": 0.97,
+        "d": 0.58
+      },
+      "usdz_file": "usdz/chair_dining_leather_01.usdz",
+      "poly_count": 22013,
+      "variants": [
+        "mat_felt_grey",
+        "mat_walnut_dark"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "dining_chair_02",
+        "url": "https://polyhaven.com/a/dining_chair_02",
+        "license": "CC0",
+        "authors": [
+          "James Ray Cock"
+        ]
+      }
+    },
+    {
+      "id": "cat_chair_office_mesh_01",
+      "class": "chair",
+      "style_tags": [
+        "industrial",
+        "minimal"
+      ],
+      "dims_m": {
+        "w": 0.57,
+        "h": 1.01,
+        "d": 0.68
+      },
+      "usdz_file": "usdz/chair_office_mesh_01.usdz",
+      "poly_count": 5072,
+      "variants": [
+        "mat_felt_grey"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "SchoolChair_01",
+        "url": "https://polyhaven.com/a/SchoolChair_01",
+        "license": "CC0",
+        "authors": [
+          "Ethan Place"
+        ]
+      }
+    },
+    {
+      "id": "cat_chair_armchair_boucle_01",
+      "class": "chair",
+      "style_tags": [
+        "modern",
+        "scandinavian",
+        "midcentury",
+        "leather"
+      ],
+      "dims_m": {
+        "w": 0.82,
+        "h": 1.02,
+        "d": 0.99
+      },
+      "usdz_file": "usdz/chair_armchair_boucle_01.usdz",
+      "poly_count": 8916,
+      "variants": [
+        "mat_boucle_cream",
+        "mat_linen_oat"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "modern_arm_chair_01",
+        "url": "https://polyhaven.com/a/modern_arm_chair_01",
+        "license": "CC0",
+        "authors": [
+          "Vibrant Nordic"
+        ]
+      }
+    },
+    {
+      "id": "cat_chair_armchair_classic_01",
+      "class": "chair",
+      "style_tags": [
+        "classic",
+        "vintage",
+        "soft"
+      ],
+      "dims_m": {
+        "w": 0.85,
+        "h": 1.07,
+        "d": 0.77
+      },
+      "usdz_file": "usdz/chair_armchair_classic_01.usdz",
+      "poly_count": 5626,
+      "variants": [
+        "mat_boucle_cream",
+        "mat_felt_grey"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "ArmChair_01",
+        "url": "https://polyhaven.com/a/ArmChair_01",
+        "license": "CC0",
+        "authors": [
+          "Kirill Sannikov"
+        ]
+      }
+    },
+    {
+      "id": "cat_chair_lounge_midcentury_01",
+      "class": "chair",
+      "style_tags": [
+        "midcentury",
+        "modern",
+        "leather",
+        "warm"
+      ],
+      "dims_m": {
+        "w": 1.01,
+        "h": 1.17,
+        "d": 1.19
+      },
+      "usdz_file": "usdz/chair_lounge_midcentury_01.usdz",
+      "poly_count": 6148,
+      "variants": [
+        "mat_walnut_dark",
+        "mat_oak_light"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "mid_century_lounge_chair",
+        "url": "https://polyhaven.com/a/mid_century_lounge_chair",
+        "license": "CC0",
+        "authors": [
+          "Kuutti Siitonen"
+        ]
+      }
+    },
+    {
+      "id": "cat_chair_felt_01",
+      "class": "chair",
+      "style_tags": [
+        "classic",
+        "vintage",
+        "soft"
+      ],
+      "dims_m": {
+        "w": 0.67,
+        "h": 1.06,
+        "d": 0.66
+      },
+      "usdz_file": "usdz/chair_felt_01.usdz",
+      "poly_count": 4213,
+      "variants": [
+        "mat_felt_grey",
+        "mat_boucle_cream"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "GreenChair_01",
+        "url": "https://polyhaven.com/a/GreenChair_01",
+        "license": "CC0",
+        "authors": [
+          "Kirill Sannikov"
+        ]
+      }
+    },
+    {
+      "id": "cat_chair_stool_ash_01",
+      "class": "chair",
+      "style_tags": [
+        "minimal",
+        "japandi",
+        "warm"
+      ],
+      "dims_m": {
+        "w": 0.48,
+        "h": 0.75,
+        "d": 0.49
+      },
+      "usdz_file": "usdz/chair_stool_ash_01.usdz",
+      "poly_count": 14373,
+      "variants": [
+        "mat_ash_pale",
+        "mat_oak_light"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "bar_chair_round_01",
+        "url": "https://polyhaven.com/a/bar_chair_round_01",
+        "license": "CC0",
+        "authors": [
+          "Dairon Sanchez"
+        ]
+      }
+    },
+    {
+      "id": "cat_ottoman_leather_01",
+      "class": "chair",
+      "style_tags": [
+        "modern",
+        "leather",
+        "soft"
+      ],
+      "dims_m": {
+        "w": 0.88,
+        "h": 0.62,
+        "d": 0.62
+      },
+      "usdz_file": "usdz/ottoman_leather_01.usdz",
+      "poly_count": 4240,
+      "variants": [
+        "mat_felt_grey",
+        "mat_boucle_cream"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "Ottoman_01",
+        "url": "https://polyhaven.com/a/Ottoman_01",
+        "license": "CC0",
+        "authors": [
+          "Caspian Fortune"
+        ]
+      }
+    },
+    {
+      "id": "cat_sofa_boucle_02",
+      "class": "sofa",
+      "style_tags": [
+        "modern",
+        "minimal",
+        "leather"
+      ],
+      "dims_m": {
+        "w": 1.81,
+        "h": 0.71,
+        "d": 0.82
+      },
+      "usdz_file": "usdz/sofa_boucle_02.usdz",
+      "poly_count": 2728,
+      "variants": [
+        "mat_boucle_cream",
+        "mat_felt_grey"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "sofa_02",
+        "url": "https://polyhaven.com/a/sofa_02",
+        "license": "CC0",
+        "authors": [
+          "Kirill Sannikov"
+        ]
+      }
+    },
+    {
+      "id": "cat_sofa_classic_03",
+      "class": "sofa",
+      "style_tags": [
+        "classic",
+        "vintage",
+        "soft"
+      ],
+      "dims_m": {
+        "w": 2.73,
+        "h": 1.12,
+        "d": 0.93
+      },
+      "usdz_file": "usdz/sofa_classic_03.usdz",
+      "poly_count": 8004,
+      "variants": [
+        "mat_boucle_cream",
+        "mat_linen_oat"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "sofa_03",
+        "url": "https://polyhaven.com/a/sofa_03",
+        "license": "CC0",
+        "authors": [
+          "Fran Calvente"
+        ]
+      }
+    },
+    {
+      "id": "cat_desk_oak_01",
+      "class": "table",
+      "style_tags": [
+        "scandinavian",
+        "warm",
+        "rustic"
+      ],
+      "dims_m": {
+        "w": 1.13,
+        "h": 0.8,
+        "d": 0.71
+      },
+      "usdz_file": "usdz/desk_oak_01.usdz",
+      "poly_count": 196,
+      "variants": [
+        "mat_oak_light",
+        "mat_walnut_dark"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "wooden_table_02",
+        "url": "https://polyhaven.com/a/wooden_table_02",
+        "license": "CC0",
+        "authors": [
+          "Serhii Khromov"
+        ]
+      }
+    },
+    {
+      "id": "cat_desk_metal_office_01",
+      "class": "table",
+      "style_tags": [
+        "industrial",
+        "vintage",
+        "office"
+      ],
+      "dims_m": {
+        "w": 2.0,
+        "h": 0.79,
+        "d": 0.95
+      },
+      "usdz_file": "usdz/desk_metal_office_01.usdz",
+      "poly_count": 6898,
+      "variants": [
+        "mat_felt_grey"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "metal_office_desk",
+        "url": "https://polyhaven.com/a/metal_office_desk",
+        "license": "CC0",
+        "authors": [
+          "Ulan Cabanilla"
+        ]
+      }
+    },
+    {
+      "id": "cat_table_side_wood_01",
+      "class": "table",
+      "style_tags": [
+        "vintage",
+        "warm",
+        "rustic"
+      ],
+      "dims_m": {
+        "w": 0.92,
+        "h": 0.53,
+        "d": 0.44
+      },
+      "usdz_file": "usdz/table_side_wood_01.usdz",
+      "poly_count": 3410,
+      "variants": [
+        "mat_oak_light",
+        "mat_walnut_dark"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "small_wooden_table_01",
+        "url": "https://polyhaven.com/a/small_wooden_table_01",
+        "license": "CC0",
+        "authors": [
+          "Ulan Cabanilla"
+        ]
+      }
+    },
+    {
+      "id": "cat_table_round_wood_01",
+      "class": "table",
+      "style_tags": [
+        "classic",
+        "vintage",
+        "warm"
+      ],
+      "dims_m": {
+        "w": 0.8,
+        "h": 0.75,
+        "d": 0.8
+      },
+      "usdz_file": "usdz/table_round_wood_01.usdz",
+      "poly_count": 4254,
+      "variants": [
+        "mat_walnut_dark",
+        "mat_oak_light"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "round_wooden_table_02",
+        "url": "https://polyhaven.com/a/round_wooden_table_02",
+        "license": "CC0",
+        "authors": [
+          "Ulan Cabanilla"
+        ]
+      }
+    },
+    {
+      "id": "cat_table_console_classic_01",
+      "class": "table",
+      "style_tags": [
+        "classic",
+        "vintage",
+        "traditional"
+      ],
+      "dims_m": {
+        "w": 1.54,
+        "h": 0.95,
+        "d": 0.59
+      },
+      "usdz_file": "usdz/table_console_classic_01.usdz",
+      "poly_count": 7566,
+      "variants": [
+        "mat_walnut_dark"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "ClassicConsole_01",
+        "url": "https://polyhaven.com/a/ClassicConsole_01",
+        "license": "CC0",
+        "authors": [
+          "Kirill Sannikov"
+        ]
+      }
+    },
+    {
+      "id": "cat_coffee_table_marble_01",
+      "class": "table",
+      "style_tags": [
+        "modern",
+        "minimal",
+        "marble"
+      ],
+      "dims_m": {
+        "w": 1.3,
+        "h": 0.49,
+        "d": 1.3
+      },
+      "usdz_file": "usdz/coffee_table_marble_01.usdz",
+      "poly_count": 4044,
+      "variants": [
+        "mat_glass_clear"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "coffee_table_round_01",
+        "url": "https://polyhaven.com/a/coffee_table_round_01",
+        "license": "CC0",
+        "authors": [
+          "Ulan Cabanilla"
+        ]
+      }
+    },
+    {
+      "id": "cat_coffee_table_modern_01",
+      "class": "table",
+      "style_tags": [
+        "modern",
+        "minimal",
+        "japandi"
+      ],
+      "dims_m": {
+        "w": 1.2,
+        "h": 0.39,
+        "d": 0.6
+      },
+      "usdz_file": "usdz/coffee_table_modern_01.usdz",
+      "poly_count": 4504,
+      "variants": [
+        "mat_oak_light",
+        "mat_walnut_dark"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "modern_coffee_table_01",
+        "url": "https://polyhaven.com/a/modern_coffee_table_01",
+        "license": "CC0",
+        "authors": [
+          "Amin"
+        ]
+      }
+    },
+    {
+      "id": "cat_nightstand_oak_01",
+      "class": "storage",
+      "style_tags": [
+        "scandinavian",
+        "modern",
+        "minimal"
+      ],
+      "dims_m": {
+        "w": 0.55,
+        "h": 0.55,
+        "d": 0.45
+      },
+      "usdz_file": "usdz/nightstand_oak_01.usdz",
+      "poly_count": 2756,
+      "variants": [
+        "mat_oak_light",
+        "mat_walnut_dark"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "side_table_01",
+        "url": "https://polyhaven.com/a/side_table_01",
+        "license": "CC0",
+        "authors": [
+          "James Ray Cock"
+        ]
+      }
+    },
+    {
+      "id": "cat_nightstand_classic_01",
+      "class": "storage",
+      "style_tags": [
+        "classic",
+        "vintage",
+        "traditional"
+      ],
+      "dims_m": {
+        "w": 0.57,
+        "h": 0.7,
+        "d": 0.42
+      },
+      "usdz_file": "usdz/nightstand_classic_01.usdz",
+      "poly_count": 2002,
+      "variants": [
+        "mat_walnut_dark"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "ClassicNightstand_01",
+        "url": "https://polyhaven.com/a/ClassicNightstand_01",
+        "license": "CC0",
+        "authors": [
+          "Kirill Sannikov"
+        ]
+      }
+    },
+    {
+      "id": "cat_cabinet_modern_01",
+      "class": "storage",
+      "style_tags": [
+        "modern",
+        "minimal",
+        "midcentury",
+        "japandi"
+      ],
+      "dims_m": {
+        "w": 2.44,
+        "h": 0.68,
+        "d": 0.52
+      },
+      "usdz_file": "usdz/cabinet_modern_01.usdz",
+      "poly_count": 24976,
+      "variants": [
+        "mat_walnut_dark",
+        "mat_oak_light"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "modern_wooden_cabinet",
+        "url": "https://polyhaven.com/a/modern_wooden_cabinet",
+        "license": "CC0",
+        "authors": [
+          "Patrik Pangerl"
+        ]
+      }
+    },
+    {
+      "id": "cat_cabinet_drawers_01",
+      "class": "storage",
+      "style_tags": [
+        "industrial",
+        "modern",
+        "warm"
+      ],
+      "dims_m": {
+        "w": 1.14,
+        "h": 1.88,
+        "d": 0.49
+      },
+      "usdz_file": "usdz/cabinet_drawers_01.usdz",
+      "poly_count": 26406,
+      "variants": [
+        "mat_oak_light"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "drawer_cabinet",
+        "url": "https://polyhaven.com/a/drawer_cabinet",
+        "license": "CC0",
+        "authors": [
+          "Ulan Cabanilla"
+        ]
+      }
+    },
+    {
+      "id": "cat_shelves_steel_01",
+      "class": "storage",
+      "style_tags": [
+        "industrial",
+        "modern",
+        "minimal"
+      ],
+      "dims_m": {
+        "w": 1.1,
+        "h": 2.14,
+        "d": 0.5
+      },
+      "usdz_file": "usdz/shelves_steel_01.usdz",
+      "poly_count": 4348,
+      "variants": [
+        "mat_oak_light",
+        "mat_felt_grey"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "steel_frame_shelves_01",
+        "url": "https://polyhaven.com/a/steel_frame_shelves_01",
+        "license": "CC0",
+        "authors": [
+          "James Ray Cock"
+        ]
+      }
+    },
+    {
+      "id": "cat_shelves_display_01",
+      "class": "storage",
+      "style_tags": [
+        "scandinavian",
+        "minimal",
+        "warm"
+      ],
+      "dims_m": {
+        "w": 1.08,
+        "h": 1.56,
+        "d": 0.37
+      },
+      "usdz_file": "usdz/shelves_display_01.usdz",
+      "poly_count": 3174,
+      "variants": [
+        "mat_ash_pale",
+        "mat_oak_light"
+      ],
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "wooden_display_shelves_01",
+        "url": "https://polyhaven.com/a/wooden_display_shelves_01",
+        "license": "CC0",
+        "authors": [
+          "James Ray Cock"
+        ]
+      }
+    },
+    {
+      "id": "cat_rug_wool_01",
+      "class": "storage",
+      "style_tags": [
+        "scandinavian",
+        "warm",
+        "soft"
+      ],
+      "dims_m": {
+        "w": 1.6,
+        "h": 0.02,
+        "d": 2.3
+      },
+      "usdz_file": "",
+      "poly_count": 12,
+      "variants": [
+        "mat_boucle_cream",
+        "mat_linen_oat"
+      ]
+    }
+  ]
+}

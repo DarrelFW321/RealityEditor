@@ -1,0 +1,117 @@
+{
+  "camera": {
+    "forward": [
+      -0.0096,
+      -0.2873,
+      -0.9578
+    ],
+    "fov_deg": 68.0,
+    "position": [
+      0.02,
+      1.48,
+      1.55
+    ]
+  },
+  "crosshair_ray": {
+    "hit_distance_m": 2.6624,
+    "hit_entity": "obj_table_02",
+    "hit_point": [
+      -0.0055,
+      0.715,
+      -1.0
+    ],
+    "hit_type": "object"
+  },
+  "free_space_summary": {
+    "largest_open_rect": {
+      "center": [
+        0.0,
+        0.9
+      ],
+      "size": [
+        4.0,
+        2.2
+      ],
+      "yaw": 0.0
+    },
+    "wall_clearances": [
+      {
+        "free_depth_m": 0.9888,
+        "surface_id": "srf_wall_north"
+      },
+      {
+        "free_depth_m": 2.6338,
+        "surface_id": "srf_wall_south"
+      },
+      {
+        "free_depth_m": 2.55,
+        "surface_id": "srf_wall_east"
+      },
+      {
+        "free_depth_m": 2.4125,
+        "surface_id": "srf_wall_west"
+      }
+    ]
+  },
+  "last_floor_hit": {
+    "age_ms": 0,
+    "point": null
+  },
+  "last_tap": {
+    "age_ms": 0,
+    "entity": null
+  },
+  "pointing_ray": {
+    "confidence": 1.0,
+    "screen_point": [
+      0.5,
+      0.5
+    ],
+    "source": "phone"
+  },
+  "ranked_candidates": [
+    {
+      "demonstrative": "that",
+      "entity_id": "obj_chair_left",
+      "score": 0.2188
+    },
+    {
+      "demonstrative": "that",
+      "entity_id": "obj_chair_right",
+      "score": 0.1854
+    }
+  ],
+  "salience_stack": [
+    "obj_table_02"
+  ],
+  "t": 1758153742000.0,
+  "visible_entities": [
+    {
+      "angular_offset_deg": 4.5835,
+      "class": "dining table",
+      "distance_m": 3.0586,
+      "id": "obj_table_02",
+      "occluded": false,
+      "salience": 0.5,
+      "screen_area_frac": 0.0359
+    },
+    {
+      "angular_offset_deg": 14.7287,
+      "class": "chair",
+      "distance_m": 2.318,
+      "id": "obj_chair_left",
+      "occluded": false,
+      "salience": 0.45,
+      "screen_area_frac": 0.0367
+    },
+    {
+      "angular_offset_deg": 15.7447,
+      "class": "chair",
+      "distance_m": 2.3161,
+      "id": "obj_chair_right",
+      "occluded": false,
+      "salience": 0.4,
+      "screen_area_frac": 0.0338
+    }
+  ]
+}

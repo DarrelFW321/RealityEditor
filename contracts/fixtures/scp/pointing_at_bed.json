@@ -1,0 +1,151 @@
+{
+  "camera": {
+    "forward": [
+      0.1961,
+      -0.2641,
+      -0.9443
+    ],
+    "fov_deg": 68.0,
+    "position": [
+      -1.5927,
+      1.2574,
+      1.6991
+    ]
+  },
+  "crosshair_ray": {
+    "hit_distance_m": 2.4888,
+    "hit_entity": "obj_bed_01",
+    "hit_point": [
+      -1.1048,
+      0.6,
+      -0.6511
+    ],
+    "hit_type": "object"
+  },
+  "free_space_summary": {
+    "largest_open_rect": {
+      "center": [
+        0.0,
+        0.9
+      ],
+      "size": [
+        4.0,
+        2.2
+      ],
+      "yaw": 0.0
+    },
+    "wall_clearances": [
+      {
+        "free_depth_m": 0.9888,
+        "surface_id": "srf_wall_north"
+      },
+      {
+        "free_depth_m": 2.6338,
+        "surface_id": "srf_wall_south"
+      },
+      {
+        "free_depth_m": 2.55,
+        "surface_id": "srf_wall_east"
+      },
+      {
+        "free_depth_m": 2.4125,
+        "surface_id": "srf_wall_west"
+      }
+    ]
+  },
+  "last_floor_hit": {
+    "age_ms": 0,
+    "point": null
+  },
+  "last_tap": {
+    "age_ms": 0,
+    "entity": null
+  },
+  "pointing_ray": {
+    "confidence": 1.0,
+    "screen_point": [
+      0.5,
+      0.5
+    ],
+    "source": "phone"
+  },
+  "ranked_candidates": [
+    {
+      "demonstrative": "that",
+      "entity_id": "obj_bed_01",
+      "score": 0.7748
+    },
+    {
+      "demonstrative": "that",
+      "entity_id": "srf_window_north",
+      "score": 0.1482
+    },
+    {
+      "demonstrative": "that",
+      "entity_id": "obj_table_01",
+      "score": 0.0907
+    },
+    {
+      "demonstrative": "that",
+      "entity_id": "obj_chair_01",
+      "score": 0.073
+    },
+    {
+      "demonstrative": "that",
+      "entity_id": "srf_door_east",
+      "score": 0.07
+    }
+  ],
+  "salience_stack": [
+    "obj_bed_01",
+    "srf_window_north"
+  ],
+  "t": 1758153600000.0,
+  "visible_entities": [
+    {
+      "angular_offset_deg": 3.9887,
+      "class": "queen bed",
+      "distance_m": 2.9138,
+      "id": "obj_bed_01",
+      "occluded": false,
+      "salience": 0.9,
+      "screen_area_frac": 0.0591
+    },
+    {
+      "angular_offset_deg": 21.9814,
+      "class": "window",
+      "distance_m": 4.0347,
+      "id": "srf_window_north",
+      "occluded": false,
+      "salience": 0.3,
+      "screen_area_frac": 0.0425
+    },
+    {
+      "angular_offset_deg": 28.4532,
+      "class": "desk chair",
+      "distance_m": 3.6641,
+      "id": "obj_chair_01",
+      "occluded": false,
+      "salience": 0.4,
+      "screen_area_frac": 0.0138
+    },
+    {
+      "angular_offset_deg": 37.9742,
+      "class": "writing desk",
+      "distance_m": 4.3481,
+      "id": "obj_table_01",
+      "occluded": false,
+      "salience": 0.5,
+      "screen_area_frac": 0.0196
+    },
+    {
+      "angular_offset_deg": 59.9452,
+      "class": "door",
+      "distance_m": 3.7953,
+      "id": "srf_door_east",
+      "occluded": false,
+      "salience": 0.2,
+      "screen_area_frac": 0.0499
+    }
+  ]
+}

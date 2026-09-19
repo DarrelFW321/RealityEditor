@@ -1,0 +1,304 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "ws_frames.schema.json",
+  "title": "WSFrame",
+  "description": "Session transport envelope \u2014 one frame, either direction.\n\nTwo jobs, one shape:\n  1. The wire format between the app and whatever is on the other end of the realtime connection.\n  2. The on-disk record format. SessionRecorder appends one of these per line to a .jsonl in Documents. That is why `dir` is on the frame rather than implied by the socket: a replayed log has no socket.\n\nNOTE ON `ops`: ops arrive on the MODEL connection, not from our own server. Our server has two REST endpoints and is not in the op path. A frame with type=`ops` in a recorded log came from the model.\n\nExactly one payload field is populated per frame, selected by `type`. The others are absent. This is a discriminated union written flat, because a JSON-Schema oneOf generates unusable Swift.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "dir",
+    "type",
+    "t"
+  ],
+  "properties": {
+    "dir": {
+      "type": "string",
+      "enum": [
+        "client_to_server",
+        "server_to_client"
+      ],
+      "title": "FrameDirection"
+    },
+    "t": {
+      "type": "number",
+      "description": "Epoch milliseconds. Monotonic within a recorded session; replay honours the deltas."
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "audio",
+        "context",
+        "applied",
+        "tap",
+        "hint",
+        "ops",
+        "speech",
+        "clarify",
+        "error"
+      ],
+      "description": "client_to_server: audio | context | applied | tap.  server_to_client: hint | ops | speech | clarify | error.",
+      "title": "WSFrameType"
+    },
+    "audio": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/AudioFrame"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "client_to_server. PCM16 mono. The recorder writes these with `pcm_b64` elided by default \u2014 24kHz audio is ~48KB/s and it makes the log undiffable."
+    },
+    "context": {
+      "anyOf": [
+        {
+          "$ref": "scp.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "client_to_server, 10Hz."
+    },
+    "applied": {
+      "anyOf": [
+        {
+          "$ref": "op.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "client_to_server. An op that landed, WITH its constraint_report \u2014 this is the tool result that lets the model narrate the adjustment."
+    },
+    "tap": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TapFrame"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "client_to_server. Explicit disambiguation."
+    },
+    "hint": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/HintFrame"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "server_to_client. Fire this the instant intent is recognised, before the ops exist \u2014 a highlight at 300ms is what makes 1.2s feel instant."
+    },
+    "ops": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "op.schema.json"
+      },
+      "description": "server_to_client. Intent only; every pose in here is recomputed by the on-device solver before anything is drawn."
+    },
+    "speech": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SpeechFrame"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "server_to_client."
+    },
+    "clarify": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ClarifyFrame"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "server_to_client. The ask-don't-guess path, taken when ranked_candidates are within 0.1."
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ErrorFrame"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "server_to_client."
+    }
+  },
+  "definitions": {
+    "AudioFrame": {
+      "title": "AudioFrame",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pcm_b64",
+        "sample_rate",
+        "channels"
+      ],
+      "properties": {
+        "pcm_b64": {
+          "type": "string",
+          "description": "Base64 PCM16LE. Empty string in a recorded log where audio was elided."
+        },
+        "sample_rate": {
+          "type": "integer",
+          "enum": [
+            16000,
+            24000
+          ],
+          "description": "24000 for the realtime model."
+        },
+        "channels": {
+          "type": "integer",
+          "enum": [
+            1
+          ]
+        }
+      }
+    },
+    "TapFrame": {
+      "title": "TapFrame",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity_id"
+      ],
+      "properties": {
+        "entity_id": {
+          "type": "string"
+        }
+      }
+    },
+    "HintFrame": {
+      "title": "HintFrame",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "highlight",
+            "thinking",
+            "clarify"
+          ],
+          "title": "HintKind"
+        },
+        "entity_ids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Short caption for the UI pill. Not spoken."
+        }
+      }
+    },
+    "SpeechFrame": {
+      "title": "SpeechFrame",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Transcript of what is being spoken. Recorded even when the audio is elided."
+        },
+        "audio_b64": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "final": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False for streaming deltas."
+        }
+      }
+    },
+    "ClarifyFrame": {
+      "title": "ClarifyFrame",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "question",
+        "candidates"
+      ],
+      "properties": {
+        "question": {
+          "type": "string",
+          "description": "Read aloud verbatim. Should name a distinguishing feature, not an id: 'the one by the window, or the one by the door?'"
+        },
+        "candidates": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "string"
+          },
+          "description": "Entity ids, in the same order as the question names them. The UI highlights these while the question plays."
+        }
+      }
+    },
+    "ErrorFrame": {
+      "title": "ErrorFrame",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "unknown_entity",
+            "solver_rejected",
+            "transport",
+            "token_expired",
+            "model_error",
+            "rate_limited"
+          ],
+          "title": "ErrorCode"
+        },
+        "message": {
+          "type": "string"
+        },
+        "recoverable": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False means tear down and re-mint a token."
+        }
+      }
+    }
+  }
+}

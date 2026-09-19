@@ -1,0 +1,536 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "rsg.schema.json",
+  "title": "RSG",
+  "description": "Room Scene Graph. FROZEN INTERFACE #1 \u2014 do not add fields after hour 2.\n\nCoordinate system: right-handed, Y-up, metres. Origin sits at the centroid of the floor polygon, on the floor plane. +Y is up, so every object position has y >= 0. Yaw is a rotation about +Y in radians, measured counter-clockwise from -Z (the room's 'north').\n\nThe phone is authoritative for this structure. It is never round-tripped to a server on the critical path.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "room_id",
+    "version",
+    "frame",
+    "bounds",
+    "surfaces",
+    "objects",
+    "relations",
+    "occupancy",
+    "lighting"
+  ],
+  "properties": {
+    "room_id": {
+      "type": "string",
+      "description": "Stable ULID for this room. Survives re-scans of the same physical space."
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Increments by exactly 1 per applied op. Used to detect divergence between op log and graph."
+    },
+    "frame": {
+      "$ref": "#/definitions/Frame"
+    },
+    "bounds": {
+      "$ref": "#/definitions/Bounds"
+    },
+    "surfaces": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Surface"
+      }
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/SceneObject"
+      }
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Relation"
+      }
+    },
+    "occupancy": {
+      "$ref": "#/definitions/Occupancy"
+    },
+    "lighting": {
+      "$ref": "#/definitions/Lighting"
+    }
+  },
+  "definitions": {
+    "Frame": {
+      "title": "Frame",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "world_transform",
+        "up",
+        "units"
+      ],
+      "properties": {
+        "world_transform": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 16,
+          "maxItems": 16,
+          "description": "4x4 room->ARKit-world transform, COLUMN-MAJOR (matches simd_float4x4 memory order). Identity means the room frame and the ARKit world frame coincide."
+        },
+        "up": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "Unit up vector in room space. Always [0,1,0]; present so a reader never has to assume."
+        },
+        "units": {
+          "type": "string",
+          "enum": [
+            "m"
+          ],
+          "description": "Metres. There is no other option; the field exists to make the assumption unmissable."
+        }
+      }
+    },
+    "Bounds": {
+      "title": "Bounds",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "floor_polygon",
+        "ceiling_height",
+        "area_m2"
+      ],
+      "properties": {
+        "floor_polygon": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "description": "Counter-clockwise [x,z] points on the floor plane (y=0). Closed implicitly \u2014 do not repeat the first point."
+        },
+        "ceiling_height": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "area_m2": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "Plane": {
+      "title": "Plane",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "normal",
+        "offset"
+      ],
+      "properties": {
+        "normal": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "Unit normal in room space, pointing INTO the room."
+        },
+        "offset": {
+          "type": "number",
+          "description": "Signed distance from origin along the normal: dot(normal, p) = offset for p on the plane."
+        }
+      }
+    },
+    "Swing": {
+      "title": "Swing",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hinge",
+        "direction",
+        "arc_radius"
+      ],
+      "properties": {
+        "hinge": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right"
+          ],
+          "description": "Side the hinge is on, viewed from inside the room facing the door.",
+          "title": "SwingHinge"
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "inward",
+            "outward",
+            "sliding"
+          ],
+          "title": "SwingDirection"
+        },
+        "arc_radius": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Metres. The solver keeps this arc clear \u2014 this is what produces 'I shifted it 40cm so your closet door still opens'."
+        }
+      }
+    },
+    "Surface": {
+      "title": "Surface",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "class",
+        "provenance",
+        "state",
+        "plane",
+        "polygon",
+        "material_ref"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "class": {
+          "type": "string",
+          "enum": [
+            "wall",
+            "floor",
+            "ceiling",
+            "window",
+            "door",
+            "opening"
+          ]
+        },
+        "provenance": {
+          "type": "string",
+          "enum": [
+            "real",
+            "inferred",
+            "virtual"
+          ],
+          "description": "real = measured by RoomPlan. inferred = reconstructed from measured room boundaries. virtual = introduced by an op."
+        },
+        "state": {
+          "$ref": "#/definitions/EntityState"
+        },
+        "plane": {
+          "$ref": "#/definitions/Plane"
+        },
+        "polygon": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "description": "Room-space [x,y,z] corners, counter-clockwise about the plane normal."
+        },
+        "material_ref": {
+          "type": "string",
+          "description": "Key into catalog/manifest.json materials."
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Surface id this one is cut into. Windows and doors reference their wall."
+        },
+        "swing": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Swing"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Doors only."
+        }
+      }
+    },
+    "SceneObject": {
+      "title": "SceneObject",
+      "description": "A movable or fixed thing standing in the room. Swift exposes this as `Object` via a typealias.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "class",
+        "refined_class",
+        "provenance",
+        "state",
+        "pose",
+        "dimensions",
+        "pivot",
+        "material_ref",
+        "asset_ref",
+        "movable",
+        "salience"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "class": {
+          "type": "string",
+          "description": "RoomPlan's 16 object categories, verbatim.",
+          "enum": [
+            "bathtub",
+            "bed",
+            "chair",
+            "dishwasher",
+            "fireplace",
+            "oven",
+            "refrigerator",
+            "sink",
+            "sofa",
+            "stairs",
+            "storage",
+            "stove",
+            "table",
+            "television",
+            "toilet",
+            "washerDryer",
+            "frame",
+            "shelf"
+          ]
+        },
+        "refined_class": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Free-text refinement from a VLM pass, e.g. 'nightstand' for a `storage`. Null until the VLM has run. Never trusted for geometry \u2014 only for naming in speech."
+        },
+        "provenance": {
+          "type": "string",
+          "enum": [
+            "real",
+            "inferred",
+            "virtual"
+          ]
+        },
+        "state": {
+          "$ref": "#/definitions/EntityState"
+        },
+        "pose": {
+          "$ref": "#/definitions/Pose"
+        },
+        "dimensions": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "[width, height, depth] in metres, in the object's own local frame before yaw."
+        },
+        "pivot": {
+          "type": "string",
+          "enum": [
+            "center",
+            "base_center",
+            "base_back_center"
+          ],
+          "description": "Which point of the bounding box `pose.position` refers to. base_center is the default for floor-standing furniture."
+        },
+        "material_ref": {
+          "type": "string"
+        },
+        "asset_ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Catalog entry id for the USDZ to draw. Null means draw the measured box (Twin Mode)."
+        },
+        "movable": {
+          "type": "boolean",
+          "description": "False for built-ins (stairs, fireplace). The solver rejects MOVE_OBJECT against these."
+        },
+        "salience": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Prior on how likely this is to be the referent of a bare demonstrative. Feeds the deixis scorer."
+        }
+      }
+    },
+    "Pose": {
+      "title": "Pose",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position",
+        "yaw"
+      ],
+      "properties": {
+        "position": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "Room-space [x,y,z] of the point named by `pivot`."
+        },
+        "yaw": {
+          "type": "number",
+          "description": "Radians about +Y, counter-clockwise from -Z. Range is not normalised; compare with angular difference, never equality."
+        }
+      }
+    },
+    "Relation": {
+      "title": "Relation",
+      "description": "A measured, cached spatial fact. Recomputed after every applied op \u2014 never hand-authored by the model.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subject",
+        "predicate",
+        "object"
+      ],
+      "properties": {
+        "subject": {
+          "type": "string",
+          "description": "Entity id (object or surface)."
+        },
+        "predicate": {
+          "type": "string",
+          "enum": [
+            "against_wall",
+            "on_top_of",
+            "adjacent_to",
+            "in_front_of",
+            "blocks",
+            "under_window"
+          ],
+          "title": "RelationPredicate"
+        },
+        "object": {
+          "type": "string",
+          "description": "Entity id."
+        },
+        "distance": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Metres of separation where the predicate implies one. Null for contact predicates."
+        }
+      }
+    },
+    "Occupancy": {
+      "title": "Occupancy",
+      "description": "Floor-plane occupancy for the solver. Deliberately coarse: 5cm cells over a 4x4m room is 6400 cells, which run-length-encodes to a few hundred bytes.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resolution_m",
+        "origin",
+        "size",
+        "grid_rle"
+      ],
+      "properties": {
+        "resolution_m": {
+          "type": "number",
+          "minimum": 0.05,
+          "maximum": 0.05,
+          "description": "Fixed at 5cm. Changing this invalidates every tuned clearance constant."
+        },
+        "origin": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "Room-space [x,z] of the centre of cell (0,0)."
+        },
+        "size": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[cells_x, cells_z]."
+        },
+        "grid_rle": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "description": "Run lengths in row-major order (x fastest). Runs ALTERNATE starting with FREE. A leading 0 encodes a grid that starts occupied. Run lengths must sum to size[0]*size[1]."
+        }
+      }
+    },
+    "Lighting": {
+      "title": "Lighting",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preset",
+        "intensity",
+        "ambient_cct"
+      ],
+      "properties": {
+        "preset": {
+          "type": "string",
+          "enum": [
+            "measured",
+            "daylight",
+            "evening",
+            "warm_lamp",
+            "overcast"
+          ],
+          "description": "`measured` means drive IBL from ARKit's light estimate; the others are fixed rigs a style op can select.",
+          "title": "LightingPreset"
+        },
+        "intensity": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Lux-ish scalar handed to RealityKit. Not calibrated."
+        },
+        "ambient_cct": {
+          "type": "number",
+          "minimum": 1000,
+          "maximum": 12000,
+          "description": "Correlated colour temperature in kelvin."
+        }
+      }
+    },
+    "EntityState": {
+      "title": "EntityState",
+      "description": "Lifecycle of an entity. `hidden` entities still EXIST in the graph \u2014 undo has to be able to bring them back \u2014 but are never drawn and never offered as a deixis candidate.",
+      "type": "string",
+      "enum": [
+        "present",
+        "hidden",
+        "replaced"
+      ]
+    }
+  }
+}

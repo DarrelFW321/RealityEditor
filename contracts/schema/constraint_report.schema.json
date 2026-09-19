@@ -1,0 +1,214 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "constraint_report.schema.json",
+  "title": "ConstraintReport",
+  "description": "FROZEN INTERFACE #2b \u2014 the solver's answer, handed straight back to the model as the tool result.\n\nThis is the loop that makes the app sound like it can see. The model does not know where anything is; it knows what the solver did and why. Everything here is written to be narratable in one sentence: 'I shifted it 40cm left so your closet door still opens.'\n\nRule: a report is produced for EVERY mutation attempt, including rejections. Never return a bare success.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "applied_pose",
+    "requested_pose",
+    "adjustment_reason",
+    "adjustment_distance_m",
+    "violations_resolved",
+    "remaining_notes",
+    "alternatives"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "applied",
+        "adjusted",
+        "rejected"
+      ],
+      "description": "applied = requested pose was legal and used verbatim. adjusted = the solver moved it and the model must say so. rejected = nothing changed; `alternatives` carries the offer.",
+      "title": "ReportStatus"
+    },
+    "applied_pose": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ReportPose"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Null when status is `rejected`."
+    },
+    "requested_pose": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ReportPose"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "What the op asked for, after deixis resolution but before solving. Null for ops with no pose (CHANGE_COLOR, APPLY_STYLE)."
+    },
+    "adjustment_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "One short human-readable clause, no leading capital, no trailing period \u2014 the model splices it into a sentence. e.g. 'the wardrobe door needs 91cm to open'. Null when status is `applied`."
+    },
+    "adjustment_distance_m": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Distance from requested to applied position. 0 when applied or rejected. The model should only narrate an adjustment above ~0.05m; below that nobody cares."
+    },
+    "violations_resolved": {
+      "type": "array",
+      "description": "Hard constraints that WOULD have been violated and no longer are. Empty on a clean placement.",
+      "items": {
+        "title": "ViolationResolved",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "with",
+          "overlap_m"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "intersection",
+              "out_of_bounds",
+              "floating",
+              "blocks_door_swing",
+              "blocks_walkway",
+              "blocks_window",
+              "unsupported"
+            ],
+            "title": "ViolationType"
+          },
+          "with": {
+            "type": "string",
+            "description": "Entity id the conflict was against. Empty string for room-level violations like out_of_bounds."
+          },
+          "overlap_m": {
+            "type": "number",
+            "minimum": 0,
+            "description": "How deep the violation was, metres. Drives whether the model bothers to mention it."
+          }
+        }
+      }
+    },
+    "remaining_notes": {
+      "type": "array",
+      "description": "SOFT constraints still not met after solving. These are guidance, not failures \u2014 the op applied. Surfaced so the model can say 'note that the walkway on the left is a bit tight'.",
+      "items": {
+        "title": "RemainingNote",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "side",
+          "value_m",
+          "recommended_m"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "clearance",
+              "reach",
+              "sightline",
+              "circulation",
+              "outlet_access"
+            ],
+            "title": "NoteType"
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "left",
+              "right",
+              "front",
+              "back",
+              "above",
+              "any"
+            ],
+            "title": "NoteSide"
+          },
+          "value_m": {
+            "type": "number",
+            "minimum": 0,
+            "description": "What the placement actually achieves."
+          },
+          "recommended_m": {
+            "type": "number",
+            "minimum": 0,
+            "description": "What Clearances.swift recommends. value_m < recommended_m is why this note exists."
+          }
+        }
+      }
+    },
+    "alternatives": {
+      "type": "array",
+      "maxItems": 3,
+      "description": "Ranked fallbacks. REQUIRED to be non-empty when status is `rejected` \u2014 a rejection with no alternative is a dead end on stage. `summary` is written to be read aloud verbatim.",
+      "items": {
+        "title": "Alternative",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "position",
+          "yaw",
+          "score",
+          "summary"
+        ],
+        "properties": {
+          "position": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "yaw": {
+            "type": "number"
+          },
+          "score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "summary": {
+            "type": "string",
+            "description": "e.g. 'against the north wall under the window'."
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "ReportPose": {
+      "title": "ReportPose",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position",
+        "yaw"
+      ],
+      "properties": {
+        "position": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "yaw": {
+          "type": "number"
+        }
+      }
+    }
+  }
+}

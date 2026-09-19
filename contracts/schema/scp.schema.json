@@ -1,0 +1,153 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "scp.schema.json",
+  "title": "SCP",
+  "description": "Spatial Context Packet. FROZEN INTERFACE #3.\n\nRecomputed on-device at 10Hz and pushed to the model as conversation context. MUST stay under ~2KB serialised — at 10Hz a 4KB packet is 40KB/s of uplink competing with the audio stream, and the latency budget does not survive that. If a field would push it over, the field is wrong.\n\nWhy 10Hz and not once per turn: the user sweeps the phone across the room WHILE speaking, and that sweep is the pointing gesture. 'Put it over there' lands 300-600ms after the wrist stopped moving, so the referent is in a packet from the recent past, not the one at end-of-speech. `last_floor_hit` exists for exactly this.\n\nThe client scores candidates; the model only confirms. Never ask the model to do geometry.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["t", "camera", "crosshair_ray", "pointing_ray", "last_floor_hit", "last_tap", "visible_entities", "salience_stack", "ranked_candidates", "free_space_summary"],
+  "properties": {
+    "t": { "type": "number", "description": "Epoch milliseconds at which this packet was sampled." },
+    "camera": {
+      "title": "CameraState",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position", "forward", "fov_deg"],
+      "properties": {
+        "position": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Room-space [x,y,z]." },
+        "forward": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Unit view direction in room space." },
+        "fov_deg": { "type": "number", "exclusiveMinimum": 0, "maximum": 180, "description": "Horizontal field of view." }
+      }
+    },
+    "crosshair_ray": {
+      "title": "CrosshairRay",
+      "description": "What the centre of the screen is on RIGHT NOW.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hit_entity", "hit_point", "hit_distance_m", "hit_type"],
+      "properties": {
+        "hit_entity": { "type": ["string", "null"], "description": "Entity id, or null when hit_type is `none`." },
+        "hit_point": { "type": ["array", "null"], "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+        "hit_distance_m": { "type": ["number", "null"], "minimum": 0 },
+        "hit_type": { "type": "string", "enum": ["object", "surface", "floor", "none"] }
+      }
+    },
+    "pointing_ray": {
+      "title": "PointingRay",
+      "description": "WHERE THE RAY COMES FROM. The deixis ray is not always the screen centre: when hand tracking has the user's index finger, the ray is camera -> fingertip pixel and the fingertip becomes a movable crosshair. `screen_point` is that pixel; [0.5, 0.5] is the centre and means the ray degenerates to the phone crosshair.\n\nOnly the SOURCE of the ray lives here. Every downstream consumer still reads `crosshair_ray` and `visible_entities[].angular_offset_deg`, both of which are computed FROM this ray by the client. That is why hand tracking needs no change to the scorer: it changes which ray the builder measures against, not how candidates are ranked.\n\n`source` is `phone` whenever confidence is below the tracker's gate, so a dropped hand degrades to the existing behaviour on that frame rather than freezing on a stale fingertip.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["screen_point", "confidence", "source"],
+      "properties": {
+        "screen_point": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "Normalised VIEWPORT coordinates, [0,0] top-left to [1,1] bottom-right. Not Vision's bottom-left image space \u2014 the provider converts. [0.5, 0.5] is the crosshair."
+        },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1, "description": "Tracker confidence in the fingertip. Always 1 when source is `phone`: the screen centre is not a guess." },
+        "source": { "type": "string", "enum": ["hand", "phone"], "description": "Which input produced the ray on this frame. Flips per frame; the UI shows it so a failing tracker is visible rather than silent." }
+      }
+    },
+    "last_floor_hit": {
+      "title": "LastFloorHit",
+      "description": "CRITICAL. The most recent point where the crosshair ray met the floor, with its age. 'Over there' resolves against this, not against the current frame — by the time speech ends the phone has usually moved off the spot. Keep the freshest hit within roughly the last 2s; older than that, treat as stale and ask.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["point", "age_ms"],
+      "properties": {
+        "point": { "type": ["array", "null"], "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+        "age_ms": { "type": "integer", "minimum": 0, "description": "Milliseconds since the hit. Null point means there has been no floor hit this session." }
+      }
+    },
+    "last_tap": {
+      "title": "LastTap",
+      "description": "An explicit disambiguation the user made by touching the screen. Outranks every scoring heuristic while fresh.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entity", "age_ms"],
+      "properties": {
+        "entity": { "type": ["string", "null"] },
+        "age_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "visible_entities": {
+      "type": "array",
+      "maxItems": 12,
+      "description": "On-screen entities, nearest-to-crosshair first. Capped at 12 to hold the 2KB budget — anything past the 12th was never going to be the referent of a demonstrative.",
+      "items": {
+        "title": "VisibleEntity",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "class", "angular_offset_deg", "distance_m", "screen_area_frac", "salience", "occluded"],
+        "properties": {
+          "id": { "type": "string" },
+          "class": { "type": "string", "description": "refined_class when known, else the RoomPlan class. This is the word the model will say out loud." },
+          "angular_offset_deg": { "type": "number", "minimum": 0, "description": "Angle between the crosshair ray and the entity centre. The dominant term in the deixis score." },
+          "distance_m": { "type": "number", "minimum": 0 },
+          "screen_area_frac": { "type": "number", "minimum": 0, "maximum": 1, "description": "Fraction of the viewport the entity covers. Separates 'the big thing right there' from a distant thing at the same angle." },
+          "salience": { "type": "number", "minimum": 0, "maximum": 1, "description": "INTRINSIC prominence, carried over from the RSG, where it is seeded by footprint area \u2014 big things are more likely referents. Distinct from `salience_stack`, which is conversational recency: a wardrobe nobody has mentioned is highly salient and not at all recent. Scorer.rank needs both and reads only this packet, so it has to be here." },
+          "occluded": { "type": "boolean" }
+        }
+      }
+    },
+    "salience_stack": {
+      "type": "array",
+      "maxItems": 6,
+      "items": { "type": "string" },
+      "description": "Entity ids, MOST RECENT FIRST — what has been talked about or touched this session. Resolves anaphora ('now move it back') with no geometry at all."
+    },
+    "ranked_candidates": {
+      "type": "array",
+      "maxItems": 5,
+      "description": "The client's answer to 'what does the demonstrative mean'. The model picks from this list; it does not compute it. When the top two scores are within 0.1 the client has already decided it is ambiguous — the model must ask, not guess.",
+      "items": {
+        "title": "RankedCandidate",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entity_id", "score", "demonstrative"],
+        "properties": {
+          "entity_id": { "type": "string" },
+          "score": { "type": "number", "minimum": 0, "maximum": 1 },
+          "demonstrative": { "type": "string", "enum": ["this", "that", "there", "it"], "description": "Which demonstrative this candidate is the best fit for. `this` favours near+centred, `that` far+centred, `there` the floor hit, `it` the salience stack." }
+        }
+      }
+    },
+    "free_space_summary": {
+      "title": "FreeSpaceSummary",
+      "description": "A two-number answer to 'does it fit'. Cheap enough to recompute at 10Hz, which a full occupancy grid is not — and small enough to send, which the grid also is not.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["largest_open_rect", "wall_clearances"],
+      "properties": {
+        "largest_open_rect": {
+          "title": "OpenRect",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["center", "size", "yaw"],
+          "properties": {
+            "center": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Room-space [x,z]." },
+            "size": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[width, depth] metres." },
+            "yaw": { "type": "number" }
+          }
+        },
+        "wall_clearances": {
+          "type": "array",
+          "maxItems": 8,
+          "description": "Per-wall free depth measured outward from the wall face.",
+          "items": {
+            "title": "WallClearance",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["surface_id", "free_depth_m"],
+            "properties": {
+              "surface_id": { "type": "string" },
+              "free_depth_m": { "type": "number", "minimum": 0 }
+            }
+          }
+        }
+      }
+    }
+  }
+}
