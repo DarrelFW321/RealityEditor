@@ -12,7 +12,7 @@ Implementation started 2026-09-18. This is a working migration foundation, not a
 - Parameterized table, bed, cabinet, shelf and frame assemblies used for both rendering and collisions. Multi-object additions are atomic.
 - Expo editor with touch controls, voice tool integration and a development command/diagnostics panel.
 - Single-turn RoomPlan/ARKit calibration with pose-derived coverage, targeted extra-view prompts, confidence- and coverage-driven measured/inferred provenance, and retained partial results on failure. Native code exports room surfaces, tracked camera matrices and Apple Vision hand cursor/pinch samples.
-- Fastify `/voice/session` compatibility alias, calibration sessions, bounded aligned-frame upload, asynchronous job lifecycle, scoped artifacts, cancellation and expiry. Cloud inference runs through a replaceable external worker adapter.
+- Fastify `/voice/session` compatibility alias, calibration sessions, bounded aligned-frame upload, asynchronous job lifecycle, scoped artifacts, cancellation and expiry. Cloud inference runs through a replaceable external worker adapter, and the mobile client now drives the whole round trip.
 
 ## Milestone assessment
 
@@ -23,7 +23,7 @@ Implementation started 2026-09-18. This is a working migration foundation, not a
 | M2 Spatial engine | Implemented; gate scenarios pass locally | Relation and occupancy recomputation (M6), `APPLY_STYLE` expansion (M7), device demonstration |
 | M3 Carry/release | Implemented; gate scenarios pass locally | Device demonstration |
 | M4 Calibration | Implemented; gate scenarios pass locally against replayed captures | Device captures; non-LiDAR capture route; multiroom handling |
-| M5 Reconstruction | API, client and worker boundary implemented | Vision Camera-to-room registration; deployed segmentation/completion pipeline; projected atlases and verified cleanup across external providers |
+| M5 Reconstruction | Stage A complete: the round trip runs end to end against a fake worker, gated 9/9 | Stage B the SAM/LaMa worker; Stage C the registered preview; verified cleanup across external providers |
 | M6 Hands/voice | Integration written | Device audio, fingertip alignment, turn/context timing and concurrent input demonstration |
 | M7 Creation/restyle | Procedural additions and basic edits implemented | General room-aware layout search, count-change groups, grouped mask/scene transactions, supported unusual assemblies |
 | M8 Compositing | Not implemented | Empty-shell textures, hand-preserving occlusion, temporal consistency |
@@ -416,6 +416,104 @@ gate line says "device captures". A development build now has a **Save capture a
 button that writes the raw `roomJSON` and its coverage mask; those files drop into the fixture
 directory unchanged and the scenarios do not need to change to consume them.
 
+## M5 reconstruction service — Stage A
+
+The API was complete and well defended before this milestone, and **nothing had ever called
+it**. Six pose+intrinsics keyframes were captured, counted on screen and garbage-collected;
+the client existed with zero instantiations; no method could fetch an artifact. Stage A makes
+the round trip real without touching a pixel, which is where three of the four gate clauses
+live.
+
+- **The keyframes are uploaded.** `mobile/src/runtime/reconstruction.ts` owns the server
+  session and token, uploads the six views, starts the job and follows it to a terminal
+  state. It runs *behind* the editor: the measured room is already usable, so reconstruction
+  can never block entering edit or fail it.
+- **Identity is reconciled.** `calibrationId` held RoomPlan's own room UUID, minted before
+  any server contact, so it could never equal the `randomUUID()` the server issues and
+  `stale_calibration` could never fire. The scene now adopts the server's id through
+  `SpatialEngine.adoptCalibration`, which deliberately does not commit — it changes no
+  geometry, so it must not advance the revision or enter undo history. `calibrationRevision`
+  became a real per-capture counter instead of a hardcoded `0` compared against itself.
+- **The client can fetch artifacts.** `GET /calibrations/:id/assets/:key` had existed since
+  the API was written with no client method able to reach it. Added, returning bytes rather
+  than a URL because the route needs the bearer token, which never leaves the client object.
+- **Polling is bounded.** `poll` was a single request with no loop; `awaitJob` wraps it with
+  capped backoff and a deadline, so a job that never settles surfaces as a failure instead of
+  a spinner that runs until the session expires.
+- **Failures are named.** Every request now carries the server's own reason —
+  `duplicate_frame`, `capture_limit`, `stale_calibration`, `provider_not_configured` — and
+  the editor shows reconstruction progress, completion or failure. A missing worker reads as
+  a configuration state, not a fault.
+
+### A real hole the gate found
+
+**The manifest cross-checks lived inside `HttpReconstructionProvider`, not at the store
+boundary.** A provider is explicitly a replaceable part, so swapping it silently dropped
+every one of them: the first gate run had a fake publishing a manifest for
+`someone-elses-calibration` with the job reported `completed`. `assertConsistent` moved to
+`provider.ts` as a free function and the **store** now applies it to whatever any provider
+returns, before a single byte is written. The HTTP provider keeps only transport concerns —
+bounding the response and parsing it.
+
+### Other defects fixed
+
+- **`void this.run(s, job)` could kill the process.** Its `finally` awaits an `rm`, and an
+  unhandled rejection from a floating promise terminates Node. Now caught and reported.
+- **Nothing ever called `app.close()`.** Fastify installs no signal handlers — that is
+  `fastify-cli`, which this project does not use — so the `onClose` hook that releases
+  sessions was unreachable and every Ctrl-C, container stop or deploy left uploaded camera
+  frames on disk until the next boot happened to wipe them. `SIGINT`/`SIGTERM` handlers added.
+- **Worker error detail was destroyed.** Eight distinct provider failures collapsed into
+  `reconstruction_failed` and were never logged anywhere, making a worker integration fault
+  undebuggable from the server side. The client still sees the coarse status; the operator
+  now sees which one it was. Upload refusals are likewise named rather than collapsed into
+  one opaque `capture_rejected`.
+- **A timed-out job reported two different stages** depending on which path timed it out.
+- **`store.asset` threw out of an un-try/catch'd handler** into a 500 when the map and the
+  disk disagreed; a missing artifact is a 404.
+- **`server/src/routes/assets.ts` was deleted.** 150 lines serving the legacy Swift app's
+  catalogue over HTTP: never imported, so the routes did not exist at runtime, one of its
+  three roots is not on disk, and `tools/voice-doctor.sh` reported its absence as a permanent
+  false failure. That check now reports whether a reconstruction worker is configured, which
+  is the thing that actually matters.
+
+### M5 evidence
+
+`npm run gate` now runs two suites: the app gate (24/24, unchanged) and a new server gate
+(9/9). The server gate drives every route through Fastify's `inject()` — no socket, no port
+to collide, nothing to clean up, but real routing, parsing, validation and serialisation.
+
+It lives in the server workspace on purpose: `mobile/src/runtime/scenarios.ts` is imported by
+`EditorPanel` and therefore bundled into the app, so importing Fastify from there would drag
+the whole server into the Metro bundle.
+
+| Scenario | Gate clause |
+|---|---|
+| A calibration completes end to end | round trip, artifacts marked inferred |
+| An empty room bypasses removal | empty room bypasses removal |
+| Stale and mismatched revisions are refused | revision checks |
+| A worker answering for another calibration is rejected | revision checks, late publish |
+| Deleting mid-job cancels it and revokes access | cancellation |
+| Cleanup covers deletion, expiry and shutdown | cleanup verified |
+| Retries do not duplicate work | job idempotency |
+| One session cannot read another | per-session ownership |
+| Without a worker the API says so plainly | provider_not_configured is a state, not a fault |
+
+Separately verified over a **real socket**, client against server: six keyframes uploaded,
+the server UUID adopted into the scene, the job completed with both artifacts marked
+inferred, the atlas fetched as valid PNG bytes through the previously unreachable route, and
+the session gone after dispose.
+
+The fake provider is not a shortcut — the implementation plan names it as required
+(`implementation-plan-expo.md:44`: *"Local fake jobs with delay/failure/cancellation
+controls"*). Every behaviour above is a property of the store and the API rather than of
+segmentation quality, and making them depend on model weights would mean they could only
+ever be checked by hand.
+
+**Stage A produces no pixels.** The atlas in these runs is a 1×1 PNG from the fake. The
+"clean-shell preview stays registered across viewpoints" clause needs Stage B's worker and
+Stage C's renderer, and is still open.
+
 ## Worker integration
 
 Set `RECONSTRUCTION_WORKER_URL` and `RECONSTRUCTION_WORKER_TOKEN` on Fastify only. The worker receives a POST with calibration ID/revision/frame ID and aligned keyframes containing camera metadata and JPEG data. It returns:
@@ -439,7 +537,7 @@ Set `RECONSTRUCTION_WORKER_URL` and `RECONSTRUCTION_WORKER_TOKEN` on Fastify onl
 }
 ```
 
-This defines a provider integration contract, not an implemented SAM/LaMa pipeline. No worker is selected by default; reconstruction returns `provider_not_configured`. Backboard has not been adopted. A worker must preserve metric registration and identify inferred content; a generated room illustration is insufficient.
+This defines a provider integration contract, not an implemented SAM/LaMa pipeline — that is Stage B. No worker is selected by default; reconstruction returns `provider_not_configured`, which the client presents as a configuration state rather than a failure. `FakeReconstructionProvider` implements the same interface for the gate. Note the manifest cross-checks are applied by the **store**, not by a provider, so they hold for every implementation. Backboard has not been adopted. A worker must preserve metric registration and identify inferred content; a generated room illustration is insufficient.
 
 The built-in calibration store is a bounded, single-process development service. Sessions are invalidated and their UUID directories cleaned on server restart. Use shared storage and job coordination before deploying multiple backend instances. The API's expiry cannot guarantee an external provider's retention policy.
 

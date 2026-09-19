@@ -25,6 +25,7 @@ import {
   type Scenario,
   type ScenarioResult,
 } from '../runtime/scenarios';
+import type { ReconstructionPhase } from '../runtime/reconstruction';
 
 export function EditorPanel({
   editor,
@@ -33,6 +34,7 @@ export function EditorPanel({
   origin,
   spatialOwner,
   onSaveCapture,
+  reconstruction,
   onExit,
 }: {
   editor: Editor;
@@ -44,6 +46,8 @@ export function EditorPanel({
   /** Writes the capture this room came from out as an M4 gate fixture. Absent for the
    * development room, which was never captured. */
   onSaveCapture?: () => string;
+  /** Empty-room reconstruction, which runs behind the editor after a capture. */
+  reconstruction?: ReconstructionPhase;
   onExit: () => void;
 }) {
   const snapshot = useSyncExternalStore(editor.engine.subscribe, editor.engine.getSnapshot);
@@ -395,6 +399,29 @@ export function EditorPanel({
               .map((s) => s.class)
               .join(', ')}{' '}
             were not measured directly. Placements against them are estimates.
+          </Text>
+        )}
+        {/* Reconstruction is asynchronous and optional — the measured room works without
+            it — but it must never fail silently. */}
+        {reconstruction && reconstruction.state !== 'idle' && (
+          <Text
+            style={
+              reconstruction.state === 'failed'
+                ? styles.error
+                : reconstruction.state === 'ready'
+                  ? styles.good
+                  : styles.detail
+            }
+          >
+            {reconstruction.state === 'uploading'
+              ? `Sending ${reconstruction.done}/${reconstruction.total} views for the empty-room preview…`
+              : reconstruction.state === 'reconstructing'
+                ? `Building the empty-room preview — ${reconstruction.stage}…`
+                : reconstruction.state === 'ready'
+                  ? `Empty-room preview ready: ${reconstruction.manifest.artifacts.length} inferred artifacts.`
+                  : reconstruction.state === 'unavailable'
+                    ? reconstruction.reason
+                    : `Empty-room preview failed: ${reconstruction.reason}. The measured room is unaffected.`}
           </Text>
         )}
         {snapshot.scene.removedPhysicalIds.length > 0 && (

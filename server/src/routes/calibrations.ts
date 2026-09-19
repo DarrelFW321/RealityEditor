@@ -53,8 +53,17 @@ export async function registerCalibrationRoutes(app: FastifyInstance, store: Cal
           Buffer.from(data.data.jpegBase64, 'base64'),
         );
         return reply.code(201).send({ id: data.data.metadata.id });
-      } catch {
-        return reply.code(409).send({ error: 'capture_rejected' });
+      } catch (error) {
+        // The store distinguishes invalid_state, capture_limit, duplicate_frame and
+        // expected_jpeg. Collapsing them all into one opaque code meant a client retrying a
+        // timed-out upload could not tell "already have that frame" from "you hit the cap"
+        // from "that wasn't a JPEG". Only the store's own vocabulary is forwarded; an
+        // unexpected filesystem error stays generic.
+        const known = ['invalid_state', 'capture_limit', 'duplicate_frame', 'expected_jpeg'];
+        const reason = error instanceof Error && known.includes(error.message)
+          ? error.message
+          : 'capture_rejected';
+        return reply.code(409).send({ error: reason });
       }
     },
   );

@@ -14,6 +14,7 @@ import {
 } from '../src/adapters/roomplan';
 import type { Keyframe } from '@reality/contracts';
 import { CoverageTracker, type CoverageMask } from '@reality/spatial-engine';
+import { ReconstructionRun, type ReconstructionPhase } from '../src/runtime/reconstruction';
 import type { Vec3 } from '@reality/contracts';
 
 const roomSweepDegrees = 270;
@@ -50,6 +51,11 @@ export default function Home() {
   const pendingRoom = useRef<ReturnType<typeof roomToSession> | null>(null);
   // The raw capture, kept so a development build can write it out as a gate fixture.
   const lastCapture = useRef<{ roomJSON: string; mask: CoverageMask } | null>(null);
+  // Which capture this is within the app session, so `calibrationRevision` is a real value
+  // rather than a hardcoded 0 that no staleness check could ever act on.
+  const captureCount = useRef(0);
+  const reconstruction = useRef<ReconstructionRun | null>(null);
+  const [recon, setRecon] = useState<ReconstructionPhase>({ state: 'idle' });
   // Registered references from the measurement sweep: pose + intrinsics from the same
   // ARFrame, so these are real keyframes rather than unregistered photographs.
   const keyframes = useRef<{ metadata: Keyframe; jpegBase64: string }[]>([]);
@@ -98,8 +104,29 @@ export default function Home() {
     origin.current = converted.origin;
     setAnchored(true);
     pendingRoom.current = null;
-    setEditor(createEditor(converted.scene));
+    const created = createEditor(converted.scene);
+    setEditor(created);
     setPhase('edit');
+
+    // RECONSTRUCTION RUNS BEHIND THE EDITOR, NOT IN FRONT OF IT.
+    //
+    // The measured room is already usable, so uploading and reconstructing must never
+    // block entering edit or fail it. The six keyframes were previously counted on screen
+    // and then dropped; this is the first thing that consumes them.
+    void (async () => {
+      const run = new ReconstructionRun(
+        process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8787',
+      );
+      reconstruction.current = run;
+      run.subscribe(setRecon);
+      await run.run(
+        keyframes.current,
+        converted.scene.calibrationRevision,
+        converted.scene.frameId,
+        // The scene adopts the server's id; the token stays inside the run.
+        (id) => created.engine.adoptCalibration(id),
+      );
+    })();
   };
   useEffect(() => {
     // Only while RoomPlan is actually measuring. Poses gathered after the room is built
@@ -107,6 +134,11 @@ export default function Home() {
     scanning.current = phase === 'observing';
   }, [phase]);
   const end = () => {
+    // Asks the server to delete the uploaded frames now rather than waiting out the 24h
+    // expiry. Fire-and-forget: the expiry is the guarantee, this is the courtesy.
+    void reconstruction.current?.dispose();
+    reconstruction.current = null;
+    setRecon({ state: 'idle' });
     clearCaptures();
     editor?.dispose();
     setEditor(null);
@@ -207,6 +239,7 @@ export default function Home() {
                   e.nativeEvent.roomJSON,
                   e.nativeEvent.frameId,
                   mask,
+                  captureCount.current++,
                 );
                 lastCapture.current = { roomJSON: e.nativeEvent.roomJSON, mask };
                 pendingRoom.current = converted;
@@ -300,6 +333,7 @@ export default function Home() {
           origin={origin.current}
           spatialOwner={spatialOwner}
           onSaveCapture={lastCapture.current ? saveCapture : undefined}
+          reconstruction={recon}
           onExit={end}
         />
       )}

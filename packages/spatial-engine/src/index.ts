@@ -127,6 +127,21 @@ export class SpatialEngine {
   }
 
   getSnapshot = (): EngineSnapshot => this.snapshot;
+
+  /**
+   * Adopts the server's calibration id once a reconstruction session exists.
+   *
+   * `calibrationId` starts as RoomPlan's own room UUID, minted before any server contact,
+   * so it could never match the id the server issues and every staleness check compared
+   * two values that were guaranteed to differ. This is deliberately not a commit: it
+   * changes no geometry, so it must not advance the revision, enter history, or become
+   * undoable.
+   */
+  adoptCalibration(calibrationId: string) {
+    if (!calibrationId || this.snapshot.scene.calibrationId === calibrationId) return;
+    this.publish({ scene: { ...this.snapshot.scene, calibrationId } });
+  }
+
   getLog = (): readonly EngineOp[] => this.log;
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);

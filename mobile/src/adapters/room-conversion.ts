@@ -201,6 +201,9 @@ export function roomToSession(
   json: string,
   frameId: string,
   mask?: CoverageMask,
+  /** Which capture this is within the app session. Was hardcoded 0 at every producer, so
+   * the server's staleness check had nothing to compare and could never fire. */
+  calibrationRevision = 0,
 ): { scene: EditorState; origin: Vec3; coverage: CoverageReport | null } {
   const data = NativeRoom.parse(JSON.parse(json));
   const walls = data.surfaces.filter((s) => s.kind === 'wall' && s.polygon.length >= 2);
@@ -353,7 +356,7 @@ export function roomToSession(
     calibrationId: data.id,
     frameId,
     revision: 0,
-    calibrationRevision: 0,
+    calibrationRevision,
     provenance: 'observed',
     measured,
     design: JSON.parse(JSON.stringify(measured)),

@@ -23,7 +23,16 @@ export class HttpReconstructionClient implements ReconstructionAdapter {
         ...init.headers,
       },
     });
-    if (!response.ok) throw new Error(`reconstruction_http_${response.status}`);
+    if (!response.ok) {
+      // The server names its refusals — duplicate_frame, capture_limit, stale_calibration,
+      // provider_not_configured. Carrying the reason means a caller can decide whether a
+      // retry is worth attempting instead of guessing from a status code.
+      const reason = await response
+        .json()
+        .then((body) => (body as { error?: string }).error)
+        .catch(() => undefined);
+      throw new Error(reason ?? `reconstruction_http_${response.status}`);
+    }
     return response;
   }
   async create(revision: number, frameId: string, signal: AbortSignal) {
@@ -64,6 +73,61 @@ export class HttpReconstructionClient implements ReconstructionAdapter {
       throw new Error('Stale reconstruction response');
     return job;
   }
+  /**
+   * Fetches one artifact named by a completed manifest.
+   *
+   * `GET /calibrations/:id/assets/:key` has existed since the API was written and nothing
+   * could reach it — there was no client method at all, so a manifest could be received
+   * and never acted on. Returns bytes rather than a URL because the route needs the bearer
+   * token, which deliberately never leaves this object.
+   */
+  async asset(key: string, signal: AbortSignal): Promise<{ mime: string; bytes: ArrayBuffer }> {
+    if (!this.session) throw new Error('Create a calibration first');
+    const response = await this.request(`/calibrations/${this.session.id}/assets/${key}`, {
+      signal,
+    });
+    return {
+      mime: response.headers.get('content-type') ?? 'application/octet-stream',
+      bytes: await response.arrayBuffer(),
+    };
+  }
+
+  /**
+   * Polls until the job reaches a terminal state.
+   *
+   * `poll` is a single request by design — this is the loop around it. Backoff is capped
+   * and the whole wait is bounded, because a job that never settles must surface as a
+   * failure rather than as a spinner that runs until the session expires.
+   */
+  async awaitJob(
+    job: ReconstructionJob,
+    signal: AbortSignal,
+    onStage?: (job: ReconstructionJob) => void,
+  ): Promise<ReconstructionJob> {
+    const deadline = Date.now() + 180_000;
+    let wait = 250;
+    let current = job;
+    while (Date.now() < deadline) {
+      if (signal.aborted) throw new Error('reconstruction_cancelled');
+      if (current.status !== 'queued' && current.status !== 'running') return current;
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, wait);
+        signal.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(timer);
+            reject(new Error('reconstruction_cancelled'));
+          },
+          { once: true },
+        );
+      });
+      current = await this.poll(current, signal);
+      onStage?.(current);
+      wait = Math.min(wait * 2, 4_000);
+    }
+    throw new Error('reconstruction_timeout');
+  }
+
   async poll(job: ReconstructionJob, signal: AbortSignal) {
     const response = await this.request(`/jobs/${job.id}`, { signal });
     const next = JobSchema.parse(await response.json());
