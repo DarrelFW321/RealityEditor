@@ -2,13 +2,15 @@ import { z } from 'zod';
 import {
   ReconstructionManifestSchema,
   type Keyframe,
-  type ReconstructionManifest,
+  type ReconstructionRoom,
 } from '@reality/contracts';
 
 export interface ReconstructionInput {
   calibrationId: string;
   calibrationRevision: number;
   frameId: string;
+  /** Planes to project onto and volumes to reject, in room space. */
+  room: ReconstructionRoom;
   keyframes: { metadata: Keyframe; jpegBase64: string }[];
 }
 const OutputSchema = z
@@ -35,6 +37,30 @@ export type ReconstructionOutput = z.infer<typeof OutputSchema>;
 export interface ReconstructionProvider {
   readonly id: string;
   reconstruct(input: ReconstructionInput, signal: AbortSignal): Promise<ReconstructionOutput>;
+}
+
+/**
+ * Semantic checks on whatever a provider returned. Called by the STORE, not by a provider,
+ * because the store is what publishes and every provider is untrusted — including ours.
+ *
+ * These used to live inside `HttpReconstructionProvider`, which meant swapping the provider
+ * silently dropped all of them: the gate caught a fake publishing a manifest for
+ * `someone-elses-calibration` with the job reported as completed. A provider is explicitly
+ * a replaceable part, so its replacement must not be able to take the safety checks with it.
+ */
+export function assertConsistent(input: ReconstructionInput, output: ReconstructionOutput) {
+  const { manifest } = output;
+  if (
+    manifest.calibrationId !== input.calibrationId ||
+    manifest.calibrationRevision !== input.calibrationRevision ||
+    manifest.frameId !== input.frameId
+  )
+    throw new Error('worker_revision_mismatch');
+  if (!['atlas', 'shell'].every((role) => manifest.artifacts.some((a) => a.role === role)))
+    throw new Error('worker_incomplete_shell');
+  const keys = new Set(output.assets.map((a) => a.key));
+  if (keys.size !== output.assets.length || manifest.artifacts.some((a) => !keys.has(a.key)))
+    throw new Error('worker_missing_artifact');
 }
 
 /** A GPU worker can be replaced without changing the HTTP app or mobile client. */
@@ -76,19 +102,8 @@ export class HttpReconstructionProvider implements ReconstructionProvider {
     } finally {
       await reader.cancel();
     }
-    const output = OutputSchema.parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-    const manifest: ReconstructionManifest = output.manifest;
-    if (
-      manifest.calibrationId !== input.calibrationId ||
-      manifest.calibrationRevision !== input.calibrationRevision ||
-      manifest.frameId !== input.frameId
-    )
-      throw new Error('worker_revision_mismatch');
-    if (!['atlas', 'shell'].every((role) => manifest.artifacts.some((a) => a.role === role)))
-      throw new Error('worker_incomplete_shell');
-    const keys = new Set(output.assets.map((a) => a.key));
-    if (keys.size !== output.assets.length || manifest.artifacts.some((a) => !keys.has(a.key)))
-      throw new Error('worker_missing_artifact');
-    return output;
+    // Transport's job: bound the bytes and parse them. The semantic cross-checks are the
+    // store's, so they apply to every provider rather than only to this one.
+    return OutputSchema.parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
   }
 }

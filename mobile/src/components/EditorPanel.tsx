@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { AdapterSlot } from '@reality/adapters';
+import { bearingFor } from '@reality/spatial-engine';
 import type { EditorState, InteractionContext, Vec3 } from '@reality/contracts';
 import type { Editor, Intent } from '../runtime/editor';
 import type { TrackedFrame } from '../adapters/roomplan';
@@ -17,21 +18,38 @@ import { RealtimeVoice } from '../adapters/realtime';
 import { evaluateSpatialFrame } from '../adapters/roomplan';
 import { SceneView } from './SceneView';
 import { resolveHand } from '../adapters/hand';
-import { checkDeterminism, runScenario, scenarios, type ScenarioResult } from '../runtime/scenarios';
+import { InputCoordinator } from '../runtime/coordinator';
+import { applyToPoint, roomFromWorld } from '../adapters/room-space';
+import {
+  checkDeterminism,
+  runScenario,
+  scenariosFor,
+  type Scenario,
+  type ScenarioResult,
+} from '../runtime/scenarios';
+import type { ReconstructionPhase } from '../runtime/reconstruction';
 
 export function EditorPanel({
   editor,
   frame,
   handFrame,
-  floorOffset,
+  origin,
   spatialOwner,
+  onSaveCapture,
+  reconstruction,
   onExit,
 }: {
   editor: Editor;
   frame?: MutableRefObject<TrackedFrame | null>;
   handFrame?: MutableRefObject<TrackedFrame | null>;
-  floorOffset?: number;
+  /** Room-space origin in ARKit world coordinates. */
+  origin?: Vec3;
   spatialOwner?: string;
+  /** Writes the capture this room came from out as an M4 gate fixture. Absent for the
+   * development room, which was never captured. */
+  onSaveCapture?: () => string;
+  /** Empty-room reconstruction, which runs behind the editor after a capture. */
+  reconstruction?: ReconstructionPhase;
   onExit: () => void;
 }) {
   const snapshot = useSyncExternalStore(editor.engine.subscribe, editor.engine.getSnapshot);
@@ -46,10 +64,69 @@ export function EditorPanel({
     [dev, setDev] = useState(false);
   const [, refreshDiagnostics] = useState(0);
   const [sceneSize, setSceneSize] = useState<{ width: number; height: number } | null>(null);
+  // The shell is a preview of the room without its furniture. Off by default: the
+  // measured room is the working surface, and the shell is something you turn on to look
+  // at rather than something that silently replaces what you were editing against.
+  const [showShell, setShowShell] = useState(false);
+  /** M7.6.5: planning progress is its OWN indicator. A layout search takes long enough
+   * that reusing the per-edit latency line would read as one very slow edit. */
+  const [planning, setPlanning] = useState<string | null>(null);
+  const [proposal, setProposal] = useState<string | null>(null);
   const [gate, setGate] = useState<ScenarioResult[]>([]);
-  const [gateRunning, setGateRunning] = useState(false);
+  const [gateRunning, setGateRunning] = useState<Scenario['milestone'] | null>(null);
+  const [gateMilestone, setGateMilestone] = useState<Scenario['milestone'] | null>(null);
   const renderFps = useRef(0);
   const slot = useRef(new AdapterSlot<RealtimeVoice>(editor.diagnostics));
+  // One owner for selection, destination and turn binding, shared by hands, touch and
+  // voice. The React state below mirrors it for rendering; the coordinator is the source.
+  const input = useRef(new InputCoordinator(editor));
+  useEffect(() => {
+    // 10Hz, unconditionally. Sampling only on change meant a stationary selection had no
+    // recent sample for a speech turn to bind against.
+    const timer = setInterval(() => {
+      input.current.sample();
+      // The SCP needs a viewpoint. Taken from the same tracked frame the renderer uses,
+      // converted into room space once here rather than in the packet builder.
+      const tracked = frame?.current;
+      if (tracked) {
+        const toRoom = roomFromWorld(tracked.roomAnchor, origin ?? [0, 0, 0]);
+        const eye = applyToPoint(toRoom, {
+          x: tracked.cameraToWorld[12] ?? 0,
+          y: tracked.cameraToWorld[13] ?? 0,
+          z: tracked.cameraToWorld[14] ?? 0,
+        });
+        // Camera forward is -Z of the pose, rotated into room space.
+        const f = { x: -(tracked.cameraToWorld[8] ?? 0), y: -(tracked.cameraToWorld[9] ?? 0), z: -(tracked.cameraToWorld[10] ?? 0) };
+        const rotated = {
+          x: toRoom[0]! * f.x + toRoom[4]! * f.y + toRoom[8]! * f.z,
+          y: toRoom[1]! * f.x + toRoom[5]! * f.y + toRoom[9]! * f.z,
+          z: toRoom[2]! * f.x + toRoom[6]! * f.y + toRoom[10]! * f.z,
+        };
+        const hand = tracked.hand;
+        input.current.setView({
+          position: [eye.x, eye.y, eye.z],
+          forward: [rotated.x, rotated.y, rotated.z],
+          fovDeg: 68,
+          screenPoint: hand?.x !== undefined && hand.y !== undefined ? [hand.x, hand.y] : [0.5, 0.5],
+          pointingConfidence: hand?.confidence ?? 1,
+          pointingSource: hand?.visible ? 'hand' : 'phone',
+        });
+      }
+    }, 100);
+    return () => clearInterval(timer);
+  }, [frame, origin]);
+  useEffect(
+    () =>
+      input.current.subscribe(() => {
+        setSelected(input.current.getSelection());
+        setDestination(input.current.getDestination());
+      }),
+    [],
+  );
+  useEffect(() => {
+    const coordinator = input.current;
+    return () => coordinator.dispose();
+  }, []);
   // One clock everywhere: epoch milliseconds. Attention binds against this.
   const context = useRef<InteractionContext>({
     turnId: 'manual',
@@ -72,15 +149,29 @@ export function EditorPanel({
     return () => clearInterval(timer);
   }, [dev]);
   useEffect(() => {
-    sync({ revision: snapshot.scene.revision, selectedId: selected, destination });
-  }, [selected, destination, snapshot.scene.revision]);
+    // frameId was initialised once at mount and never refreshed, so a re-measure
+    // without a remount made every attention bind miss with `other_frame` and every
+    // intent fail as stale. It is part of scene identity and has to track the scene.
+    sync({
+      revision: snapshot.scene.revision,
+      frameId: snapshot.scene.frameId,
+      selectedId: selected,
+      destination,
+    });
+  }, [selected, destination, snapshot.scene.revision, snapshot.scene.frameId]);
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (s) => {
       if (s !== 'active') {
         editor.engine.setTracking(false);
         void slot.current.dispose();
         setVoice(false);
-      } else if (!frame) editor.engine.setTracking(true);
+      } else {
+        // Resume from what the AR session actually reports, not from the absence of a
+        // frame ref. `!frame` is false for every real session, so editing stayed dead
+        // after any backgrounding until the panel remounted. With no tracked frame at
+        // all (the development room) there is nothing to lose tracking, so resume.
+        editor.engine.setTracking(!frame || frame.current?.tracking === 'normal');
+      }
     });
     return () => {
       subscription.remove();
@@ -103,7 +194,7 @@ export function EditorPanel({
         );
         const state = editor.engine.getSnapshot();
         const carriedId = state.phase === 'held' ? state.preview?.targetId : undefined;
-        const hit = resolveHand(hand, state.scene, floorOffset ?? 0, carriedId),
+        const hit = resolveHand(hand, state.scene, origin ?? [0, 0, 0], carriedId),
           down = !!hand.hand?.pinching;
         if (!hit && hand.hand?.x === undefined) setDestination(null);
         // An object hit is a destination only when it can actually carry the load.
@@ -115,12 +206,15 @@ export function EditorPanel({
                 kind: hit.objectId ? ('object' as const) : ('surface' as const),
               }
             : null;
-        if (asDestination) setDestination(asDestination);
+        if (asDestination) input.current.point(asDestination, 'hand');
         if (down && !pinched && hit?.objectId && state.phase !== 'held') {
-          setSelected(hit.objectId);
+          input.current.select(hit.objectId, 'hand');
           sync({ selectedId: hit.objectId });
           editor.engine.begin(hit.objectId);
         }
+        // Point-and-dwell: holding a target for 500ms selects it without a pinch.
+        if (!down && state.phase !== 'held')
+          input.current.dwell(hit?.objectId ?? null, hand.tracking === 'normal');
         if (down && state.phase === 'held' && asDestination && state.preview)
           editor.engine.preview({ position: asDestination.position, yaw: state.preview.pose.yaw });
         // Only a held transaction may be released; a settle in flight must not be re-entered.
@@ -134,13 +228,72 @@ export function EditorPanel({
           void editor.engine.release(editor.nextId(), context.current.destination.surfaceId);
         if (hand.hand?.x === undefined && pinched) editor.engine.cancel();
         pinched = down;
-        sync({ destination: asDestination ?? context.current.destination });
+        // The coordinator owns the destination and times it; re-latching the previous
+        // one here every frame kept a stale destination alive forever, which is what the
+        // two-second freshness rule exists to prevent.
+        sync({ destination: input.current.getDestination() });
       }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [editor, handFrame, floorOffset]);
+  }, [editor, handFrame, origin]);
+  /** One runner for both gates. The M2 and M3 suites differ only in which scenarios
+   * they select, so duplicating the button would let one drift behind the other. */
+  async function runGate(milestone: Scenario['milestone']) {
+    setGateRunning(milestone);
+    setGateMilestone(milestone);
+    try {
+      const results: ScenarioResult[] = [];
+      for (const scenario of scenariosFor(milestone)) results.push(await runScenario(scenario));
+      // Repeating a solver-heavy scenario is the only check that a result was reasoned
+      // rather than sampled.
+      const repeatable = scenariosFor(milestone).find(
+        (s) =>
+          s.id ===
+          {
+            M2: 'overlap',
+            M3: 'carry-adjust',
+            M4: 'calib-inferred',
+            M6: 'input-ordering',
+            M7: 'plan-deterministic',
+          }[
+            milestone
+          ],
+      );
+      if (repeatable) {
+        const repeat = await checkDeterminism(repeatable);
+        results.push({ id: 'determinism', title: 'Determinism', steps: [repeat], ok: repeat.ok });
+      }
+      setGate(results);
+    } finally {
+      setGateRunning(null);
+    }
+  }
+  /**
+   * The touch half of M7.3.7: the same coordinator, the same planner and the same
+   * transaction the voice tool uses. Not a parallel implementation — if this drifted
+   * from the voice path, "available to touch and voice" would stop being true.
+   */
+  async function runRestyle(recipe: unknown) {
+    setPlanning('Planning the layout…');
+    try {
+      const result = await input.current.restyle(recipe, { source: 'touch' }, (stage) =>
+        setPlanning(stage === 'planning' ? 'Planning the layout…' : null),
+      );
+      setMessage([result.message, ...result.conflicts].join(' '));
+      setProposal(
+        result.refusal === 'awaiting_confirmation'
+          ? (editor.pendingProposal()?.explanation ?? 'Apply this arrangement?')
+          : null,
+      );
+    } catch {
+      setMessage('That arrangement could not be planned.');
+    } finally {
+      setPlanning(null);
+    }
+  }
+
   async function run(intent: Intent | unknown) {
     try {
       const result = await editor.intent(intent, context.current);
@@ -159,15 +312,12 @@ export function EditorPanel({
     setConnecting(true);
     try {
       await slot.current.replace(() => {
-        const adapter = new RealtimeVoice(
+        return new RealtimeVoice(
           process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8787',
           editor.diagnostics,
-          editor.intent,
+          input.current,
           setMessage,
-          editor.attention,
         );
-        adapter.setContext(context.current);
-        return adapter;
       });
       setVoice(true);
     } catch (error) {
@@ -178,7 +328,9 @@ export function EditorPanel({
   }
   function point(position: Vec3, surfaceId: string, kind: 'surface' | 'object' = 'surface') {
     const next = { position, surfaceId, kind };
-    setDestination(next);
+    // Through the coordinator, which notifies the mirror above. Pointing at a
+    // destination never changes the selection.
+    input.current.point(next, 'touch');
     sync({ destination: next });
     if (snapshot.phase === 'held' && snapshot.preview)
       editor.engine.preview({ position, yaw: snapshot.preview.pose.yaw });
@@ -200,12 +352,14 @@ export function EditorPanel({
         <SceneView
           snapshot={snapshot}
           selectedId={selected}
-          onSelect={setSelected}
+          onSelect={(id) => input.current.select(id, 'touch')}
           onPoint={point}
           onRelease={release}
           frame={frame}
-          floorOffset={floorOffset}
+          origin={origin}
           diagnostics={dev}
+          shell={showShell && reconstruction?.state === 'ready' ? reconstruction.shell : null}
+          atlasUri={reconstruction?.state === 'ready' ? reconstruction.atlasUri : null}
           onRenderFps={(fps) => {
             renderFps.current = fps;
           }}
@@ -237,6 +391,15 @@ export function EditorPanel({
       <View style={styles.panel}>
         <Text style={styles.text}>{snapshot.result?.message ?? message}</Text>
         <Text style={styles.detail}>{message}</Text>
+        {/* Drop validity while held. The PRD requires this to be visible during the
+            carry and equally requires it not to block one, so it is only ever text. */}
+        {snapshot.phase === 'held' && snapshot.previewValidity && (
+          <Text style={snapshot.previewValidity.ok ? styles.good : styles.error}>
+            {snapshot.previewValidity.ok
+              ? 'Clear to release here.'
+              : snapshot.previewValidity.reason}
+          </Text>
+        )}
         {snapshot.result?.conflicts.map((error, i) => (
           <Text key={`conflict-${i}`} style={styles.error}>
             {error}
@@ -252,6 +415,25 @@ export function EditorPanel({
             {caveat}
           </Text>
         ))}
+        {planning && <Text style={styles.detail}>{planning}</Text>}
+        {proposal && (
+          <View style={styles.row}>
+            <Button
+              title="Apply it"
+              onPress={() => {
+                setProposal(null);
+                void input.current.confirm().then((r) => setMessage(r.message));
+              }}
+            />
+            <Button
+              title="Leave it"
+              onPress={() => {
+                setProposal(null);
+                void run({ action: 'cancel' });
+              }}
+            />
+          </View>
+        )}
         {snapshot.pending && (
           <View style={styles.row}>
             <Button
@@ -281,6 +463,27 @@ export function EditorPanel({
               <Text style={styles.text}>+ {family}</Text>
             </Pressable>
           ))}
+          <Pressable
+            style={styles.chip}
+            disabled={planning !== null}
+            onPress={() =>
+              void runRestyle({
+                label: 'a blue bedroom with three frames',
+                items: [
+                  { family: 'bed', count: 1, color: '#3b6ea5' },
+                  {
+                    family: 'frame',
+                    count: 3,
+                    color: '#2f2f33',
+                    ...(destination?.surfaceId ? { surface_id: destination.surfaceId } : {}),
+                  },
+                ],
+                wall_color: '#5b7fa8',
+              })
+            }
+          >
+            <Text style={styles.text}>✦ blue bedroom</Text>
+          </Pressable>
         </ScrollView>
         {object && (
           <>
@@ -335,6 +538,56 @@ export function EditorPanel({
           />
           {__DEV__ && <Button title="Modules" onPress={() => setDev(!dev)} />}
         </View>
+        {/* Unknown space must not read as verified space. A shell with inferred structure
+            says so here rather than letting the room imply it was all measured. */}
+        {snapshot.scene.provenance === 'inferred' && (
+          <Text style={styles.detail}>
+            Partly inferred:{' '}
+            {snapshot.scene.design.surfaces
+              .filter((s) => s.provenance === 'inferred' && s.state === 'present')
+              .map((s) => s.class)
+              .join(', ')}{' '}
+            were not measured directly. Placements against them are estimates.
+          </Text>
+        )}
+        {/* Reconstruction is asynchronous and optional — the measured room works without
+            it — but it must never fail silently. */}
+        {reconstruction && reconstruction.state !== 'idle' && (
+          <Text
+            style={
+              reconstruction.state === 'failed'
+                ? styles.error
+                : reconstruction.state === 'ready'
+                  ? styles.good
+                  : styles.detail
+            }
+          >
+            {reconstruction.state === 'uploading'
+              ? `Sending ${reconstruction.done}/${reconstruction.total} views for the empty-room preview…`
+              : reconstruction.state === 'reconstructing'
+                ? `Building the empty-room preview — ${reconstruction.stage}…`
+                : reconstruction.state === 'ready'
+                  ? `Empty-room preview ready — ${reconstruction.shell.surfaces.length} surfaces, filled by ${reconstruction.shell.completion}.`
+                  : reconstruction.state === 'unavailable'
+                    ? reconstruction.reason
+                    : `Empty-room preview failed: ${reconstruction.reason}. The measured room is unaffected.`}
+          </Text>
+        )}
+        {reconstruction?.state === 'ready' && (
+          <View style={styles.row}>
+            <Button
+              title={showShell ? 'Hide empty room' : 'Show empty room'}
+              onPress={() => setShowShell(!showShell)}
+            />
+            {showShell && (
+              <Text style={styles.detail}>
+                {reconstruction.shell.surfaces.filter((s) => s.inferred).length} of{' '}
+                {reconstruction.shell.surfaces.length} surfaces are mostly inferred and are
+                dimmed. Real furniture is still in the camera; only the shell is clean.
+              </Text>
+            )}
+          </View>
+        )}
         {snapshot.scene.removedPhysicalIds.length > 0 && (
           <Text style={styles.detail}>
             Design preview: {snapshot.scene.removedPhysicalIds.length} physical objects require
@@ -408,42 +661,87 @@ export function EditorPanel({
               · hand {handFrame?.current?.hand?.visible ? 'visible' : 'not visible'}
             </Text>
             {handFrame?.current?.hand && (
-              <Text style={styles.detail}>
-                Hand confidence {handFrame.current.hand.confidence.toFixed(2)} · pinch{' '}
-                {handFrame.current.hand.pinching ? 'closed' : 'open'} · Vision{' '}
-                {handFrame.current.hand.processed} processed / {handFrame.current.hand.dropped} dropped
-                {' · '}{handFrame.current.hand.latencyMs.toFixed(0)} ms
-              </Text>
+              <>
+                <Text style={styles.detail}>
+                  Hand confidence {handFrame.current.hand.confidence.toFixed(2)} · pinch{' '}
+                  {handFrame.current.hand.pinching ? 'closed' : 'open'} · Vision{' '}
+                  {handFrame.current.hand.processed} processed / {handFrame.current.hand.dropped} dropped
+                  {' · '}{handFrame.current.hand.latencyMs.toFixed(0)} ms
+                </Text>
+                {/* Names the stage that is failing. Without this a dead cursor looks the
+                    same whether Vision found nothing, found a hand whose point landed
+                    off-screen, or found one below the activation gate. */}
+                {(() => {
+                  const h = handFrame.current!.hand!;
+                  const [reason, bad] = !h.detected
+                    ? ['Vision found no hand in this frame', true]
+                    : h.inView === false
+                      ? [
+                          `fingertip mapped OUTSIDE the viewport at ${h.displayX?.toFixed(2)}, ${h.displayY?.toFixed(2)} — orientation or viewport is wrong`,
+                          true,
+                        ]
+                      : !h.visible
+                        ? [
+                            `seen at confidence ${(h.rawConfidence ?? 0).toFixed(2)}, below the 0.60 needed to activate`,
+                            true,
+                          ]
+                        : ['tracking the fingertip', false];
+                  return (
+                    <Text style={bad ? styles.error : styles.good}>Hand: {reason}</Text>
+                  );
+                })()}
+                <Text style={styles.detail}>
+                  Fingertip raw {handFrame.current.hand.rawX?.toFixed(2) ?? '—'},
+                  {handFrame.current.hand.rawY?.toFixed(2) ?? '—'} · display{' '}
+                  {handFrame.current.hand.displayX?.toFixed(2) ?? '—'},
+                  {handFrame.current.hand.displayY?.toFixed(2) ?? '—'} · smoothed{' '}
+                  {handFrame.current.hand.x?.toFixed(2) ?? '—'},
+                  {handFrame.current.hand.y?.toFixed(2) ?? '—'}
+                </Text>
+              </>
             )}
+            {/* The gate that silently killed hand targeting once before: resolveHand
+                refuses any frame whose coordinate frame is not the scene's. */}
+            <Text
+              style={[
+                styles.detail,
+                frame?.current && frame.current.frameId !== snapshot.scene.frameId
+                  ? styles.error
+                  : styles.good,
+              ]}
+            >
+              Frame identity:{' '}
+              {!frame?.current
+                ? 'no tracked frame'
+                : frame.current.frameId === snapshot.scene.frameId
+                  ? 'live frames match the scene'
+                  : `MISMATCH — scene ${snapshot.scene.frameId.slice(0, 8)}, live ${frame.current.frameId.slice(0, 8)}; hand targeting is disabled`}
+            </Text>
             <Text style={styles.detail}>
               Alignment markers: red is the AR origin; green points are measured floor boundaries.
             </Text>
             <Text style={[styles.detail, gate.length && gate.every((g) => g.ok) ? styles.good : styles.error]}>
-              M2 gate: {gate.length ? `${gate.filter((g) => g.ok).length}/${gate.length} scenarios pass` : 'not run'}
+              {gateMilestone ?? 'M2/M3'} gate:{' '}
+              {gate.length
+                ? `${gate.filter((g) => g.ok).length}/${gate.length} scenarios pass`
+                : 'not run'}
             </Text>
-            <Button
-              title={gateRunning ? 'Running…' : 'Run M2 gate'}
-              disabled={gateRunning}
-              onPress={() => {
-                setGateRunning(true);
-                void (async () => {
-                  const results: ScenarioResult[] = [];
-                  for (const scenario of scenarios) results.push(await runScenario(scenario));
-                  const overlap = scenarios.find((s) => s.id === 'overlap');
-                  if (overlap) {
-                    const repeat = await checkDeterminism(overlap);
-                    results.push({
-                      id: 'determinism',
-                      title: 'Determinism',
-                      steps: [repeat],
-                      ok: repeat.ok,
-                    });
-                  }
-                  setGate(results);
-                  setGateRunning(false);
-                })();
-              }}
-            />
+            {onSaveCapture && (
+              <Button
+                title="Save capture as fixture"
+                onPress={() => setMessage(onSaveCapture())}
+              />
+            )}
+            <View style={styles.row}>
+              {(['M2', 'M3', 'M4', 'M6', 'M7'] as const).map((milestone) => (
+                <Button
+                  key={milestone}
+                  title={gateRunning === milestone ? 'Running…' : `Run ${milestone} gate`}
+                  disabled={gateRunning !== null}
+                  onPress={() => void runGate(milestone)}
+                />
+              ))}
+            </View>
             {gate.map((result) => (
               <View key={result.id}>
                 <Text style={[styles.detail, result.ok ? styles.good : styles.error]}>
@@ -485,14 +783,17 @@ export function EditorPanel({
     </View>
   );
 }
-/** A destination on another object is only offered when that object can carry it. */
+/** A destination on another object is only offered when that object can carry it.
+ * Goes through `bearingFor` so a scanned desk is offered on the same terms as one the
+ * user added; checking `assemblies` directly excluded every measured object. */
 function canSupport(
   scene: EditorState,
   carriedId: string | undefined,
   targetId: string,
 ): boolean {
   if (!carriedId || carriedId === targetId) return false;
-  if (!scene.assemblies[targetId]?.support?.bearing) return false;
+  const target = scene.design.objects.find((o) => o.id === targetId);
+  if (!target || !bearingFor(scene, target)) return false;
   const carried = scene.design.objects.find((o) => o.id === carriedId);
   if (!carried) return false;
   const [w, h, d] = carried.dimensions;

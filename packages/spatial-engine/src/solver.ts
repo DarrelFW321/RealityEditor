@@ -64,6 +64,22 @@ export function dominant(violations: ViolationResolved[]): ViolationResolved | n
   return best;
 }
 
+/** Resolves scene ids to the words a person would use. Shared so the live carry preview
+ * and a committed rejection describe the same obstacle the same way, rather than one
+ * saying "the queen bed" and the other "obj_bed_01". */
+export function narrator(scene: EditorState) {
+  return {
+    name: (id: string) => {
+      const object = scene.design.objects.find((o) => o.id === id);
+      if (object) return object.refined_class ?? object.class;
+      const surface = scene.design.surfaces.find((s) => s.id === id);
+      return surface ? surface.class : id;
+    },
+    arcRadius: (id: string) =>
+      scene.design.surfaces.find((s) => s.id === id)?.swing?.arc_radius ?? null,
+  };
+}
+
 /** One lowercase clause, no leading capital and no trailing period. */
 export function reasonFor(
   violation: ViolationResolved,
@@ -95,7 +111,10 @@ export function reasonFor(
   }
 }
 
-function compass(normal: Vec3): string {
+/** Which wall of the room this normal belongs to, in words a person can act on.
+ * Exported so the calibration coverage prompts name a direction the same way a placement
+ * alternative does. */
+export function compass(normal: Vec3): string {
   if (normal[2] > 0.9) return 'north';
   if (normal[2] < -0.9) return 'south';
   if (normal[0] < -0.9) return 'east';
@@ -131,14 +150,7 @@ export function solvePlacement(
   report.requested_pose = pose(requested);
 
   const scan = index ?? buildIndex(scene, targetId);
-  const name = (id: string) => {
-    const object = scene.design.objects.find((o) => o.id === id);
-    if (object) return object.refined_class ?? object.class;
-    const surface = scene.design.surfaces.find((s) => s.id === id);
-    return surface ? surface.class : id;
-  };
-  const arcRadius = (id: string) =>
-    scene.design.surfaces.find((s) => s.id === id)?.swing?.arc_radius ?? null;
+  const { name, arcRadius } = narrator(scene);
 
   if (!stored.movable && moved({ position: stored.pose.position as Vec3, yaw: stored.pose.yaw }, requested))
     return {

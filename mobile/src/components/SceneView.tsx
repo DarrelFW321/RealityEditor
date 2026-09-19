@@ -1,23 +1,29 @@
 import { useMemo, useRef, type MutableRefObject } from 'react';
 import { Canvas, useFrame, type ThreeEvent } from '@react-three/fiber/native';
 import { Shape, Matrix4, Vector2 } from 'three';
+import { roomFromWorld } from '../adapters/room-space';
+import { ShellView } from './ShellView';
+import type { Shell } from '@reality/contracts';
 import { parts, type EngineSnapshot } from '@reality/spatial-engine';
 import type { Vec3 } from '@reality/contracts';
 import type { TrackedFrame } from '../adapters/roomplan';
 
 function CameraPose({
   frame,
-  floorOffset,
+  origin,
 }: {
   frame: MutableRefObject<TrackedFrame | null>;
-  floorOffset: number;
+  origin: Vec3;
 }) {
   const matrix = useMemo(() => new Matrix4(), []);
+  const toRoom = useMemo(() => new Matrix4(), []);
   useFrame(({ camera }) => {
     const current = frame.current;
     if (!current) return;
-    matrix.fromArray(current.cameraToWorld);
-    matrix.elements[13]! -= floorOffset;
+    // Follow the anchor rather than subtracting a fixed offset: ARKit revises the anchor
+    // as it improves its map, and that revision is exactly the drift correction.
+    toRoom.fromArray(roomFromWorld(current.roomAnchor, origin));
+    matrix.fromArray(current.cameraToWorld).premultiply(toRoom);
     matrix.decompose(camera.position, camera.quaternion, camera.scale);
     camera.projectionMatrix.fromArray(current.projection);
     camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
@@ -47,8 +53,10 @@ export function SceneView({
   onPoint,
   onRelease,
   frame,
-  floorOffset = 0,
+  origin = [0, 0, 0],
   diagnostics = false,
+  shell,
+  atlasUri,
   onRenderFps,
 }: {
   snapshot: EngineSnapshot;
@@ -57,8 +65,11 @@ export function SceneView({
   onPoint: (point: Vec3, surfaceId: string) => void;
   onRelease: () => void;
   frame?: MutableRefObject<TrackedFrame | null>;
-  floorOffset?: number;
+  origin?: Vec3;
   diagnostics?: boolean;
+  /** The reconstructed empty-room shell, when one exists. Purely additive. */
+  shell?: Shell | null;
+  atlasUri?: string | null;
   onRenderFps?: (fps: number) => void;
 }) {
   const scene = snapshot.previewScene ?? snapshot.scene;
@@ -80,7 +91,7 @@ export function SceneView({
         gl.setClearColor('#0c1420', frame ? 0 : 1);
       }}
     >
-      {frame && <CameraPose frame={frame} floorOffset={floorOffset} />}
+      {frame && <CameraPose frame={frame} origin={origin} />}
       {onRenderFps && <RenderDiagnostics onSample={onRenderFps} />}
       <ambientLight intensity={1.6} />
       <directionalLight position={[3, 8, 4]} intensity={2} />
@@ -142,7 +153,15 @@ export function SceneView({
                   <boxGeometry args={part.size} />
                   <meshStandardMaterial
                     color={part.color}
-                    emissive={selectedId === object.id ? '#214d77' : '#000000'}
+                    emissive={
+                      // A carried object glows amber where it could not be released, so
+                      // drop validity is readable without looking away from the object.
+                      preview && snapshot.previewValidity?.ok === false
+                        ? '#7a3a12'
+                        : selectedId === object.id
+                          ? '#214d77'
+                          : '#000000'
+                    }
                     transparent={!!preview}
                     opacity={preview ? 0.65 : 1}
                   />
@@ -151,6 +170,9 @@ export function SceneView({
             </group>
           );
         })}
+      {/* Drawn before the helpers and after the room so it sits behind editable content.
+          Renders nothing at all when no shell has been reconstructed. */}
+      {shell && <ShellView shell={shell} atlasUri={atlasUri ?? null} />}
       {!frame && <gridHelper args={[8, 16, '#677d92', '#334254']} />}
       {diagnostics && (
         <group>

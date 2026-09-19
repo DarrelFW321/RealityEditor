@@ -12,6 +12,9 @@ public class SpatialCaptureModule: Module {
     View(SpatialCaptureView.self) {
       Events("onRoom", "onFrame", "onStatus", "onKeyframe")
       Prop("mode") { (view: SpatialCaptureView, mode: String) in view.setMode(mode) }
+      Prop("roomOrigin") { (view: SpatialCaptureView, origin: [Double]?) in
+        view.setRoomAnchor(origin)
+      }
     }
   }
 }
@@ -37,6 +40,17 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
   private let arSession = ARSession()
   private let cameraView = ARSCNView(frame: .zero)
   private var capture: RoomCaptureSession?
+  /// ANCHORS THE ROOM TO THE WORLD SO IT STOPS DRIFTING.
+  ///
+  /// Room geometry used to be frozen against the ARKit world origin as it stood the
+  /// instant the scan finished. ARKit keeps refining that estimate - relocalisation and
+  /// loop closure move the world frame - and nothing told the room about it, so placed
+  /// objects slid away from the real surfaces they were placed on.
+  ///
+  /// ARKit adjusts anchor transforms when it revises its understanding of the space. By
+  /// pinning the room's origin to an anchor and reading that anchor's CURRENT transform
+  /// every frame, the correction is applied for free and the room stays put.
+  private var roomAnchor: ARAnchor?
   private var mode = "idle"
   private var lastFrame: TimeInterval = 0
   private let handQueue = DispatchQueue(label: "reality.hand", qos: .userInitiated)
@@ -80,6 +94,10 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
   /// ~7° of consistent rotation before committing. Far above tremor, far below
   /// the 45° keyframe spacing.
   private static let directionLatchRadians: Float = 0.12
+  /// ~690 deg/s. Above this a yaw change is a tracking jump, not a turn.
+  private static let maxTurnRateRadians: Float = 12
+  /// Sample time paired with `scanYaw`, so the delta can be read as a rate.
+  private var scanYawTime: TimeInterval?
   private var scanDegrees: Float = 0
   private var reportedScanBucket = -1
 
@@ -132,9 +150,34 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
     arSession.pause()
     mode = "idle"
     processing = false
+    setRoomAnchor(nil)
     resetHandTracking()
     onStatus(["code": "camera_owner", "message": "Spatial camera released."])
   }
+  /// `origin` is the room origin in world coordinates, as the conversion computed it.
+  /// Passing nil removes the anchor, which returns the room to a fixed world pose.
+  func setRoomAnchor(_ origin: [Double]?) {
+    if let existing = roomAnchor {
+      arSession.remove(anchor: existing)
+      roomAnchor = nil
+    }
+    guard let origin, origin.count == 3, origin.allSatisfy({ $0.isFinite }) else { return }
+    var transform = matrix_identity_float4x4
+    transform.columns.3 = SIMD4<Float>(Float(origin[0]), Float(origin[1]), Float(origin[2]), 1)
+    let anchor = ARAnchor(name: "room-origin", transform: transform)
+    roomAnchor = anchor
+    arSession.add(anchor: anchor)
+  }
+
+  /// The anchor's transform as ARKit currently believes it, not as it was created.
+  /// Nil until an anchor exists, which is what the JavaScript fallback keys off.
+  private func roomAnchorTransform(_ frame: ARFrame) -> [Float]? {
+    guard let roomAnchor else { return nil }
+    guard let live = frame.anchors.first(where: { $0.identifier == roomAnchor.identifier })
+    else { return nil }
+    return array(live.transform)
+  }
+
   func setMode(_ next: String) {
     guard next != mode else { return }
     if next == "idle" { stop(); return }
@@ -285,19 +328,22 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
     DispatchQueue.main.async {
       guard self.mode != "idle", self.generation == epoch, size.width > 0 else { return }
       if self.mode == "scan" {
-        self.updateScanProgress(camera.transform)
+        self.updateScanProgress(camera.transform, at: time)
         self.captureKeyframeIfDue(frame: frame, orientation: orientation, epoch: epoch)
       }
       let view = camera.viewMatrix(for: orientation)
       let projection = camera.projectionMatrix(for: orientation, viewportSize: size, zNear: 0.01, zFar: 100)
-      self.onFrame(["timestamp": frame.timestamp * 1000, "frameId": self.frameId, "tracking": tracking,
+      var payload: [String: Any] = ["timestamp": frame.timestamp * 1000, "frameId": self.frameId, "tracking": tracking,
         "trackingReason": trackingReason, "sequence": sequence, "fps": fps,
         "viewportWidth": size.width, "viewportHeight": size.height,
         "orientation": self.orientationName(orientation),
         "worldMapping": worldMapping,
         "thermalState": thermalState,
         "memoryWarnings": warningCount,
-        "cameraToWorld": self.array(view.inverse), "projection": self.array(projection)])
+        "cameraToWorld": self.array(view.inverse), "projection": self.array(projection)]
+      // Read every frame, not once at creation: the whole point is that ARKit moves it.
+      if let anchored = self.roomAnchorTransform(frame) { payload["roomAnchor"] = anchored }
+      self.onFrame(payload)
       if self.mode == "edit" && frameTimestamp - self.lastHandSample >= 1.0 / 12.0 {
         if self.processing {
           self.handDropped += 1
@@ -345,15 +391,10 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
             self.handProcessed += 1
             var cursor = self.acceptHand(detection, timestamp: frameTimestamp)
             cursor["latencyMs"] = max(0, (ProcessInfo.processInfo.systemUptime - frameTimestamp) * 1000)
-            self.onFrame(["timestamp": frameTimestamp * 1000, "frameId": self.frameId, "tracking": tracking,
-              "trackingReason": trackingReason, "sequence": sequence, "fps": fps,
-              "viewportWidth": size.width, "viewportHeight": size.height,
-              "orientation": self.orientationName(orientation),
-              "worldMapping": worldMapping,
-              "thermalState": thermalState,
-              "memoryWarnings": warningCount,
-              "cameraToWorld": self.array(view.inverse), "projection": self.array(projection),
-              "hand": cursor])
+            var handPayload = payload
+            handPayload["timestamp"] = frameTimestamp * 1000
+            handPayload["hand"] = cursor
+            self.onFrame(handPayload)
           }
         }
       }
@@ -403,6 +444,7 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
     scanYaw = nil
     scanDirection = 0
     scanDirectionEvidence = 0
+    scanYawTime = nil
     scanDegrees = 0
     reportedScanBucket = -1
     keyframesEmitted = 0
@@ -493,20 +535,38 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
     (0..<3).flatMap { c in (0..<3).map { r in m[c][r] } }
   }
 
-  private func updateScanProgress(_ transform: simd_float4x4) {
+  private func updateScanProgress(_ transform: simd_float4x4, at time: TimeInterval) {
     let forward = SIMD2<Float>(-transform.columns.2.x, -transform.columns.2.z)
     guard simd_length(forward) > 0.35 else { return }
     let yaw = atan2(forward.x, forward.y)
-    guard let previous = scanYaw else {
+    guard let previous = scanYaw, let previousTime = scanYawTime else {
       scanYaw = yaw
+      scanYawTime = time
       return
     }
-    scanYaw = yaw
+    let dt = Float(time - previousTime)
     let delta = atan2(sin(yaw - previous), cos(yaw - previous))
-    guard abs(delta) < 0.35, abs(delta) > 0.001 else { return }
+    scanYaw = yaw
+    scanYawTime = time
+
+    // REJECT ON RATE, NOT ON PER-SAMPLE ANGLE.
+    //
+    // This used to be `abs(delta) < 0.35`, a flat 20-degrees-per-sample cap. The frame
+    // pump is throttled to 20Hz but RoomPlan is heavy and it runs slower under load, so
+    // 20 degrees per sample is an ordinary brisk turn rather than a glitch. Every sample
+    // over the cap was discarded while `scanYaw` still advanced, so that rotation was
+    // lost for good: a real 270-degree turn reported closer to 210.
+    //
+    // What the guard is actually for is an ARKit relocalisation jump, where yaw changes
+    // discontinuously. A rate test catches that and nothing else - no human turns a phone
+    // at 690 degrees per second on purpose.
+    guard dt > 0, abs(delta) / dt <= Self.maxTurnRateRadians else { return }
 
     if scanDirection == 0 {
-      // Sum until the intent is unambiguous, rather than trusting one sample.
+      // Sum until the intent is unambiguous, rather than trusting one sample. There is no
+      // minimum-delta floor any more: the old `abs(delta) > 0.001` threw away every sample
+      // below 0.057 degrees, which at 20Hz is 1.1 deg/s, so the slow steady sweep the app
+      // asks for accumulated nothing. Tremor is unbiased and cancels in this sum.
       scanDirectionEvidence += delta
       guard abs(scanDirectionEvidence) >= Self.directionLatchRadians else { return }
       scanDirection = scanDirectionEvidence >= 0 ? 1 : -1
@@ -613,6 +673,15 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
       pinchStreak = 0
     }
 
+    // WHY THERE IS NO CURSOR HAS TO BE ANSWERABLE FROM JAVASCRIPT.
+    //
+    // `x`/`y` only exist once the hand is active, and the fields below used to be gated on
+    // `usable`, which already requires the point to be in view. So "Vision saw nothing",
+    // "saw a hand but its point landed outside the viewport" and "saw it but confidence
+    // was under the gate" all arrived as an identical `visible: false, confidence: 0`, and
+    // a dead hand cursor could not be diagnosed without a native debugger.
+    //
+    // These report the detection as it was, before any gate.
     var result: [String: Any] = [
       "visible": handActive,
       "pinching": pinching,
@@ -621,10 +690,16 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
       "processed": handProcessed,
       "dropped": handDropped,
       "latencyMs": 0,
+      "detected": detection != nil,
+      "inView": inside,
+      "rawConfidence": detection?.confidence ?? 0,
     ]
-    if let raw = usable?.rawPoint {
-      result["rawX"] = raw.x
-      result["rawY"] = raw.y
+    if let detection {
+      // Unconditional: the out-of-view case is exactly the one worth seeing.
+      result["rawX"] = detection.rawPoint.x
+      result["rawY"] = detection.rawPoint.y
+      result["displayX"] = detection.point.x
+      result["displayY"] = detection.point.y
     }
     if handActive, let point = filteredHand {
       result["x"] = point.x

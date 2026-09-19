@@ -1,8 +1,8 @@
 import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 import { mkdir, writeFile, readFile, rm, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Keyframe, ReconstructionJob } from '@reality/contracts';
-import type { ReconstructionProvider } from './provider.js';
+import type { Keyframe, ReconstructionJob, ReconstructionRoom } from '@reality/contracts';
+import { assertConsistent, type ReconstructionInput, type ReconstructionProvider } from './provider.js';
 
 type Session = {
   id: string;
@@ -10,6 +10,8 @@ type Session = {
   expires: number;
   revision: number;
   frameId: string;
+  /** The room this calibration is of. Immutable for the session's life. */
+  room: ReconstructionRoom;
   frames: Map<string, Keyframe>;
   bytes: number;
   uploads: number;
@@ -19,11 +21,18 @@ type Session = {
   assets: Map<string, string>;
 };
 const TTL = 24 * 60 * 60 * 1000;
+
+/** Never the raw object: a provider error can carry a response body. */
+const describe = (error: unknown) =>
+  error instanceof Error ? error.message : 'non_error_thrown';
+
 export class CalibrationStore {
   private sessions = new Map<string, Session>();
   constructor(
     private root: string,
     private provider: ReconstructionProvider | null,
+    /** Reason strings only — no media, no credentials, no keyframe content. */
+    private onDiagnostic?: (code: string, detail: string) => void,
   ) {}
   get providerId() {
     return this.provider?.id ?? null;
@@ -35,7 +44,7 @@ export class CalibrationStore {
       if (/^[0-9a-f-]{36}$/.test(id))
         await rm(join(this.root, id), { recursive: true, force: true });
   }
-  async create(revision: number, frameId: string) {
+  async create(revision: number, frameId: string, room: ReconstructionRoom) {
     await this.expire();
     if (this.sessions.size >= 32) throw new Error('capacity');
     const id = randomUUID(),
@@ -46,6 +55,7 @@ export class CalibrationStore {
       expires: Date.now() + TTL,
       revision,
       frameId,
+      room,
       frames: new Map(),
       bytes: 0,
       uploads: 0,
@@ -117,7 +127,15 @@ export class CalibrationStore {
     };
     s.job = job;
     s.controller = new AbortController();
-    void this.run(s, job);
+    // `run` is deliberately not awaited — the 202 returns immediately — but its `finally`
+    // awaits an `rm`, and an unhandled rejection from a floating promise terminates Node.
+    // The catch keeps a failed cleanup from taking the whole server down with it.
+    void this.run(s, job).catch((error) => {
+      job.status = 'failed';
+      job.stage = 'failed';
+      job.error = 'reconstruction_failed';
+      this.onDiagnostic?.('reconstruction_crashed', describe(error));
+    });
     return job;
   }
   private async run(s: Session, job: ReconstructionJob) {
@@ -134,10 +152,18 @@ export class CalibrationStore {
           ),
         })),
       );
-      const output = await this.provider!.reconstruct(
-        { calibrationId: s.id, calibrationRevision: s.revision, frameId: s.frameId, keyframes },
-        controller.signal,
-      );
+      const input: ReconstructionInput = {
+        calibrationId: s.id,
+        calibrationRevision: s.revision,
+        frameId: s.frameId,
+        room: s.room,
+        keyframes,
+      };
+      const output = await this.provider!.reconstruct(input, controller.signal);
+      // Before a single byte is written. A provider that answers for a different
+      // calibration, omits the shell, or references an artifact it did not send must not
+      // be able to publish, whichever provider it is.
+      assertConsistent(input, output);
       if (s.deleted || controller.signal.aborted) return;
       for (const asset of output.assets) {
         if (s.deleted || controller.signal.aborted) return;
@@ -152,16 +178,26 @@ export class CalibrationStore {
       job.result = output.manifest;
       job.status = 'completed';
       job.stage = 'ready';
-    } catch {
+    } catch (error) {
       if (!s.deleted) {
         job.status = 'failed';
         job.stage = 'failed';
         job.error = controller.signal.aborted ? 'reconstruction_timeout' : 'reconstruction_failed';
+        // The provider distinguishes eight failures — worker_revision_mismatch,
+        // worker_incomplete_shell, worker_missing_artifact and five more. All of them used
+        // to collapse into `reconstruction_failed` and were never logged anywhere, which
+        // made a worker integration fault undebuggable from the server side. The client
+        // still sees the coarse status; the operator now sees which one it was.
+        this.onDiagnostic?.(job.error, describe(error));
       }
     } finally {
       clearTimeout(timeout);
       if (!s.deleted && controller.signal.aborted && job.status === 'running') {
         job.status = 'failed';
+        // `stage` was left reading 'reconstructing' on this path while the catch-block
+        // path set it to 'failed', so a timed-out job reported two different stages
+        // depending on how it timed out.
+        job.stage = 'failed';
         job.error = 'reconstruction_timeout';
       }
       if (s.deleted) await rm(join(this.root, s.id), { recursive: true, force: true });
@@ -175,7 +211,15 @@ export class CalibrationStore {
   async asset(s: Session, key: string) {
     const mime = s.assets.get(key);
     if (!mime || s.deleted) return null;
-    return { mime, bytes: await readFile(join(this.root, s.id, `artifact-${key}`)) };
+    try {
+      return { mime, bytes: await readFile(join(this.root, s.id, `artifact-${key}`)) };
+    } catch (error) {
+      // The map said the artifact exists and the disk disagreed. Previously this threw
+      // straight out of an un-try/catch'd route handler and became a 500; a missing file
+      // is a 404 like any other.
+      this.onDiagnostic?.('asset_unreadable', describe(error));
+      return null;
+    }
   }
   async remove(s: Session) {
     s.deleted = true;

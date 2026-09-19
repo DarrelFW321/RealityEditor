@@ -17,6 +17,10 @@ export type DiagnosticEvent = {
   generation?: number;
   // Deliberately no arbitrary payload: no transcripts, credentials or camera data.
   durationMs?: number;
+  /** A scene entity id - the carried object, or a support surface that was refused.
+   * An id, never a description: the PRD requires rejected supports to be recorded, and
+   * this keeps that possible without opening the event up to free text. */
+  targetId?: string;
 };
 export interface DiagnosticSink {
   emit(event: DiagnosticEvent): void;

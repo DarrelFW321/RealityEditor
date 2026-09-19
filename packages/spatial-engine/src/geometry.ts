@@ -27,6 +27,13 @@ export type ObjectLike = {
 
 const GEOM_EPS = 1e-9;
 
+/** Height-to-narrowest-base ratio past which an upright object is called unstable.
+ * 4:1 clears real furniture - a 2m wardrobe 0.6m deep is 3.3:1 - while catching the
+ * pole-shaped results a resize or a bad recipe can produce. `buildObject` uses 2:1 for
+ * the same idea, but only at recipe time and only for some families, so a moved or
+ * resized object was never checked at all. */
+const SLENDERNESS_CAVEAT_RATIO = 4;
+
 /** Local -Z is forward at yaw 0, matching Swift's Yaw.forward and Three's rotation.y. */
 export function forward(yaw: number): Vec3 {
   return [-Math.sin(yaw), 0, -Math.cos(yaw)];
@@ -301,6 +308,63 @@ function centroid3(polygon: readonly number[][]): Vec3 {
   return [x / n, y / n, z / n];
 }
 
+/** Classes whose top face can hold something. A scan gives us a bounding box and a
+ * category, never a declared bearing region, so without this list nothing can ever be
+ * placed on real furniture: `resolveSupport` refuses with "has no surface that can hold
+ * something" for every RoomPlan object in the room. Mirrors the shape of `frontClearance`.
+ * Conservative by design - a surface omitted here only costs a refusal, while a wrong
+ * inclusion invents load capacity the scan never measured. */
+function bearsLoad(kind: SceneObject['class']): boolean {
+  switch (kind) {
+    case 'table':
+    case 'storage':
+    case 'shelf':
+    case 'dishwasher':
+    case 'washerDryer':
+      return true;
+    // Beds and sofas are soft, chairs are for sitting, and a hob or basin is not a shelf.
+    default:
+      return false;
+  }
+}
+
+/** The bearing region an object offers, declared or derived.
+ *
+ * A recipe-built object carries its own `bearing` (scene-recipes assigns one to every
+ * template with a usable flat top). A measured object has no assembly at all, so its
+ * bearing is derived from the scanned bounding box using the identical inset formula -
+ * scanned and virtual furniture must behave the same way or the rules become unlearnable.
+ * Returns null when the class cannot bear load, which is what keeps "no unintended
+ * stacking" true: the caller still has to name this support explicitly. */
+export function bearingFor(scene: EditorState, object: ObjectLike): Bearing | null {
+  const declared = scene.assemblies[object.id]?.support?.bearing;
+  // `null` is a deliberate "this holds nothing" (a bed), not a missing value. Respect it.
+  if (declared !== undefined) return declared;
+  if (!bearsLoad(object.class)) return null;
+  const w = object.dimensions[0] ?? 0;
+  const h = object.dimensions[1] ?? 0;
+  const d = object.dimensions[2] ?? 0;
+  if (!(w > 0 && h > 0 && d > 0)) return null;
+  const inset = Math.min(0.02, Math.min(w, d) * 0.05);
+  const hw = Math.max(0.01, w / 2 - inset);
+  const hd = Math.max(0.01, d / 2 - inset);
+  return {
+    polygon: [
+      [-hw, -hd],
+      [hw, -hd],
+      [hw, hd],
+      [-hw, hd],
+    ],
+    y: h,
+  };
+}
+
+/** Says so out loud when a bearing was inferred, so a derived top face is never narrated
+ * as a measured one. */
+export function bearingIsDerived(scene: EditorState, object: ObjectLike): boolean {
+  return scene.assemblies[object.id]?.support?.bearing === undefined && bearsLoad(object.class);
+}
+
 function worldBearing(
   scene: EditorState,
   object: ObjectLike,
@@ -330,7 +394,7 @@ function neighbourOf(scene: EditorState, object: ObjectLike, measured: boolean):
     hi,
     minY: Math.min(...list.map((p) => p.minY)),
     maxY: Math.max(...list.map((p) => p.maxY)),
-    bearing: worldBearing(scene, object, scene.assemblies[object.id]?.support?.bearing ?? null),
+    bearing: worldBearing(scene, object, bearingFor(scene, object)),
     kind: object.class,
     measured,
   };
@@ -509,7 +573,8 @@ export type PlacementAspect =
   | 'doors'
   | 'support'
   | 'mount'
-  | 'construction';
+  | 'construction'
+  | 'stability';
 
 export type PlacementFinding = {
   violations: ViolationResolved[];
@@ -535,6 +600,7 @@ const ALL_ASPECTS: readonly PlacementAspect[] = [
   'support',
   'mount',
   'construction',
+  'stability',
 ];
 
 function subjectParts(scene: EditorState, object: ObjectLike) {
@@ -638,6 +704,20 @@ export function evaluatePlacement(
   if (aspects.includes('mount') && !stop() && support?.mode === 'wall') {
     for (const violation of evaluateMount(index, object, support, hull, minY, maxY))
       violations.push(violation);
+  }
+
+  // Standing something far taller than its base is wide is how a settled pose can be
+  // geometrically legal and still fall over. Overhang off a floor edge is already
+  // `out_of_bounds` and overhang off another object is already the 60% coverage rule, so
+  // slenderness is the only part of stability nothing else tests. A caveat, never a
+  // violation: making construction signals hard errors is exactly what made
+  // `construction: 'unknown'` unreachable and rejected every legitimate tall object.
+  if (aspects.includes('stability') && support?.mode !== 'wall') {
+    const slenderness = h / Math.max(GEOM_EPS, Math.min(w, d));
+    if (slenderness > SLENDERNESS_CAVEAT_RATIO)
+      caveats.push(
+        `Tall and narrow for its base (${slenderness.toFixed(1)}:1); it may not stand unaided.`,
+      );
   }
 
   const notes =
@@ -913,23 +993,31 @@ export function validatePlacement(
   return finding.violations.map((v) => describeViolation(v));
 }
 
-export function describeViolation(violation: ViolationResolved): string {
+/** Present tense, for describing a pose as it currently stands. `reasonFor` is the past
+ * tense sibling used to explain an edit that already happened.
+ *
+ * `name` defaults to the raw id so existing `conflicts` output is unchanged; the live
+ * carry preview passes a resolver because it is read aloud off the screen. */
+export function describeViolation(
+  violation: ViolationResolved,
+  name: (id: string) => string = (id) => id,
+): string {
   const centimetres = Math.round(violation.overlap_m * 100);
   switch (violation.type) {
     case 'intersection':
-      return `Overlaps ${violation.with} by ${centimetres}cm`;
+      return `Overlaps ${name(violation.with)} by ${centimetres}cm`;
     case 'out_of_bounds':
-      return violation.with ? `Extends past ${violation.with}` : 'Outside the calibrated room';
+      return violation.with ? `Extends past ${name(violation.with)}` : 'Outside the calibrated room';
     case 'floating':
       return violation.with
-        ? `Not resting on ${violation.with}`
+        ? `Not resting on ${name(violation.with)}`
         : `Floating ${centimetres}cm off the floor`;
     case 'blocks_door_swing':
-      return `Blocks ${violation.with}`;
+      return `Blocks ${name(violation.with)}`;
     case 'blocks_window':
-      return `Covers ${violation.with}`;
+      return `Covers ${name(violation.with)}`;
     case 'unsupported':
-      return violation.with ? `Unsupported on ${violation.with}` : 'Unsupported';
+      return violation.with ? `Unsupported on ${name(violation.with)}` : 'Unsupported';
     default:
       return 'In the way';
   }

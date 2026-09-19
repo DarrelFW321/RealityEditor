@@ -1,3 +1,4 @@
+export * from './captures';
 import type { EditorState, Rsg, SceneObject } from '@reality/contracts';
 import room from '../../../contracts/fixtures/rooms/bedroom_4x4.rsg.json';
 
@@ -9,7 +10,7 @@ function base(): { measured: Rsg; design: Rsg } {
 
 function state(measured: Rsg, design: Rsg, removedPhysicalIds: string[]): EditorState {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: `sample-${Date.now()}`,
     calibrationId: 'sample-calibration',
     frameId: 'sample-world',
@@ -21,6 +22,10 @@ function state(measured: Rsg, design: Rsg, removedPhysicalIds: string[]): Editor
     assemblies: {},
     removedPhysicalIds,
     removalMaskIds: [],
+    removalMaskCalibration: null,
+    // M7 envelope v2. Explicit rather than defaulted so a fixture reads the same way a
+    // real session does: a sample room starts with no groups, it does not omit the field.
+    groups: {},
   };
 }
 

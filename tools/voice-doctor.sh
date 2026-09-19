@@ -221,26 +221,24 @@ if [ -n "$LAN" ] && [ -n "$HEALTH" ]; then
   fi
 fi
 
-# ── 7. the assets the app no longer bundles ─────────────────────────────────
-# 275MB of catalogue and CoreML model live here now instead of in the app. A
-# missing asset root is not fatal — Twin Mode draws the whole room from measured
-# boxes — but it is the difference between a sofa and a grey slab.
+# ── 7. reconstruction worker ────────────────────────────────────────────────
+# Replaces the old /assets/index check. Those routes served the Swift app's 275MB
+# catalogue over HTTP; that app is not in this repo, the routes were never
+# registered, and this check reported a permanent false failure. What matters now
+# is whether reconstruction can run at all — without a worker, POST
+# /calibrations/{id}/reconstruct answers 503 and the empty-room preview is
+# unavailable, which is a configuration state rather than a fault.
 if [ -n "$HEALTH" ]; then
-  IDX=$(curl -s -m 5 http://localhost:8787/assets/index 2>/dev/null)
-  case "$IDX" in
-    *'"usdz"'*)
-      SUMMARY=$(printf '%s' "$IDX" | python3 -c "
+  RECON=$(printf '%s' "$HEALTH" | python3 -c "
 import json,sys
-d=json.load(sys.stdin)
-print('  '.join(f'{k}:{len(v)}' for k,v in d['roots'].items()), f\"total {d['total_bytes']/1048576:.0f}MB\")
+print(json.load(sys.stdin).get('reconstruction') or '')
 " 2>/dev/null)
-      ok "assets served — ${SUMMARY}" ;;
-    "")
-      bad "GET /assets/index returned nothing — restart the server to pick up the asset routes"
-      fix "cd server && npm run dev" ;;
-    *)
-      warn "GET /assets/index answered unexpectedly; the app will fall back to twin mode" ;;
-  esac
+  if [ -n "$RECON" ]; then
+    ok "reconstruction worker configured — ${RECON}"
+  else
+    warn "no reconstruction worker — /reconstruct answers 503, empty-room preview unavailable"
+    fix "set RECONSTRUCTION_WORKER_URL and RECONSTRUCTION_WORKER_TOKEN in server/.env"
+  fi
 fi
 
 echo "────────────────────────────────────────────────────────"

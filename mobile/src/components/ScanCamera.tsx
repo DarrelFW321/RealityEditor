@@ -1,3 +1,16 @@
+/**
+ * CURRENTLY UNMOUNTED. Retained deliberately, not dead by accident.
+ *
+ * This is the Vision Camera 300 degree sweep that used to run before RoomPlan. It was
+ * removed from the LiDAR journey when calibration became a single turn, and M4 removed the
+ * non-LiDAR journey too: without depth the photographs it produces are unregistered, so
+ * they could never become metric geometry and the screen after it had nothing to offer but
+ * Cancel. The welcome screen now says no up front instead.
+ *
+ * It is kept because a real non-LiDAR capture path is a later milestone and this is the
+ * only camera sweep that exists. Nothing imports it today; `mobile/app/index.tsx`
+ * deliberately no longer does.
+ */
 import { useEffect, useRef, useState } from 'react';
 import { AppState, Button, Linking, StyleSheet, Text, View } from 'react-native';
 import {
