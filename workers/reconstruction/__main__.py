@@ -26,6 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from erase import erase  # noqa: E402
 from pipeline import reconstruct  # noqa: E402
 
 MAX_BODY = 96 * 1024 * 1024
@@ -52,6 +53,22 @@ class Handler(BaseHTTPRequestHandler):
             request = json.loads(self.rfile.read(length))
         except json.JSONDecodeError:
             self._send(400, {"error": "invalid_json"})
+            return
+        # TWO ROUTES NOW, AND STILL NO FRAMEWORK. `/erase` answers one frame at a time
+        # for live hiding; everything else is the sweep. A path comparison is the whole
+        # of the dispatch, which is cheaper to keep correct than a dependency.
+        if self.path.rstrip("/") == "/erase":
+            try:
+                result = erase(request)
+            except ValueError as error:
+                self._send(400, {"error": str(error)})
+                return
+            except Exception as error:  # pragma: no cover - surfaced to the server log
+                traceback.print_exc()
+                self._send(500, {"error": type(error).__name__})
+                return
+            self.log_message("erase %s", json.dumps(result["stages"]))
+            self._send(200, result)
             return
         try:
             result = reconstruct(request, self.dump_root)

@@ -1,6 +1,12 @@
 # M8.5 — World-model research and controlled evaluation
 
-Status: desk research and implementation plan written 2026-09-19. Provider experiments, integration, and device acceptance have **not** been performed. No paid inference, room-image upload, or model deployment was performed for this research.
+Status: desk research written 2026-09-19. **M8.5-A (frozen cases) and M8.5-C (isolated
+adapter and synthetic projection evidence) implemented 2026-09-19. A masked-inpainting
+completion provider was implemented alongside it as the non-world-model comparison —
+see "Why a masked inpainter, not a world model" below.** Provider experiments,
+the bounded comparison, device comparison, and the adopt/defer/reject decision have **not**
+been performed. No paid inference, room-image upload, or model deployment has occurred, and
+the code cannot perform one without three separate deliberate acts (see M8.5-C evidence).
 
 References: [shared milestone baseline](../implementation-plan-expo.md#remaining-milestone-plans--m6-through-m9), [product requirements](../prd-expo-migration.md), [M8 live compositing](m8-live-compositing.md), [M9 internal release](m9-internal-release-candidate.md).
 
@@ -198,7 +204,8 @@ The reviewed terms permit content use for model improvement and describe prospec
 
 - [x] Current primary-source research and a bounded candidate shortlist are written down.
 - [x] Integration boundaries, evaluation sequence, and proposed adoption gates are documented.
-- [ ] Accepted M8 baseline and frozen evaluation case manifest are recorded, or their absence is the explicit reason for deferral.
+- [x] Frozen evaluation case manifest is recorded (`npm run cases`). The M8 baseline is
+      implementer-reported rather than formally accepted, and that gap is recorded below.
 - [ ] Access, pricing, privacy, and output-use decisions are recorded before applicable experiments.
 - [ ] Run ledger includes every attempted request, failure, cost, and evidence location; unrun experiments are explicitly marked unrun.
 - [ ] Comparison/recovery evidence exists for work performed; early-stop outcomes name the exact failed or unavailable prerequisite.
@@ -217,17 +224,132 @@ The reviewed terms permit content use for model improvement and describe prospec
 - [ ] Configuration/model identifiers, limitations, operations instructions, and rollback are reproducible.
 - [ ] M9 includes the adopted adapter in its full integrated acceptance; M8.5 evidence is not substituted for release acceptance.
 
+## What was built (M8.5-A and M8.5-C)
+
+| Piece | Where |
+|---|---|
+| Equirectangular convention, shell depth panorama, reprojection | [`panorama.py`](../../workers/reconstruction/panorama.py) |
+| Isolated hole-only appearance adapter with provenance | [`appearance.py`](../../workers/reconstruction/appearance.py) |
+| Zero-cost provider with a known-correct answer | [`synthetic_provider.py`](../../workers/reconstruction/synthetic_provider.py) |
+| World Labs client, budget ledger, bounded polling | [`worldlabs.py`](../../workers/reconstruction/worldlabs.py) |
+| Frozen case manifest and input hashing | [`cases.py`](../../workers/reconstruction/cases.py) |
+| Synthetic projection evidence | [`appearance_selftest.py`](../../workers/reconstruction/appearance_selftest.py) |
+| Openings in the reconstruction room payload | [`session.ts`](../../packages/contracts/src/session.ts), [`coverage.ts`](../../packages/spatial-engine/src/coverage.ts) |
+
+### One contract change was unavoidable
+
+`ReconstructionRoomSchema` carried walls and floors only, so the worker had no way to know
+where a window was. Route A renders a depth panorama from the shell and M8.5-C.2 requires
+it to respect openings — without them a ray through a window returns *wall distance*, which
+conditions the provider to paint a wall over the glass. `openings` is now sent, optional
+with a default, so a payload written before M8.5 still validates and the baseline pipeline
+is unaffected by its absence.
+
+### Three gates stand between this code and a charge
+
+`APPEARANCE_PROVIDER=worldlabs` must be set; `panorama.PROVIDER_CONVENTION_VERIFIED` must be
+flipped to True by a person who has run the provider's published depth example; and
+`WORLDLABS_CEILING_CREDITS` must be set to a positive number, with no default, because a
+default ceiling is a ceiling nobody chose. The ledger reserves the worst-case charge before
+a request leaves and treats an ambiguous outcome as **billed** rather than free.
+
+### Recorded limitations
+
+- The equirectangular convention is **self-consistent and verified to round-trip exactly**,
+  but has **not** been checked against the provider's own depth example. That check is
+  M8.5-C.3; `appearance_selftest.verify_against_reference` implements it and
+  `PROVIDER_CONVENTION_VERIFIED` guards on its result. The verifier is itself checked
+  against references we generated, including that it rejects a mirrored reference and
+  refuses landmarks too symmetric to discriminate.
+- The reconstruction room contract has no **ceiling**, so the upper hemisphere of a depth
+  panorama is unknown (76% of it in the synthetic room). Harmless for wall and floor
+  atlases, but it is unconditioned input the provider may fill with anything.
+- All four cases are backed by **synthetic** captures. Two want real ones — a patterned
+  surface and a window in a low-confidence wall — and the visual-benefit gate cannot be
+  scored on synthetic data.
+- Route B (full-world generation, registration from landmarks) is **not implemented**.
+
+## Why a masked inpainter, not a world model
+
+Follow-up research against the provider's current documentation, recorded here because
+it changes the recommendation rather than merely informing it.
+
+The requirement is that a revealed wall **match the real wall**, not merely look like a
+wall. Measured against that:
+
+| Candidate | Sees the real wall? | Can preserve observed pixels? | Verdict |
+|---|---|---|---|
+| World Labs `depth_to_rgb` | No — depth plus a **text prompt**; the schema has no reference image and no mask | No | Cannot match a specific wall |
+| World Labs world generation | Partly — takes photos, but multi-image accepts only `azimuth`; no elevation, 6-DoF pose or intrinsics, all of which ARKit gives us | No masked edit exists | Generative, not reconstructive |
+| Backboard `generate_image` | Image-to-image, but their docs state "a base image is not a mask or a guarantee of pixel-preserving edits" | **No** | Rejected by the observed-preservation gate by construction |
+| **OpenAI `/v1/images/edits`** | **Yes — conditioned on the observed pixels surrounding the hole** | **Yes — unmasked pixels preserved exactly** | Implemented |
+
+World Labs describe Marble as growing "a scene outward from a single specified viewpoint
+rather than conditioning on a global reference image or full layout". That is generation.
+It produces a plausible room, and plausible is not the requirement.
+
+**The measurement that settles it.** On the furnished fixture the north wall is already
+**91% observed** and the floor **57%**, rising to **90%** once furniture is not blocking
+the view. Most of the surface behind a piece of furniture was genuinely photographed from
+other angles during the scan, and the projector already places those real pixels. Only
+the residual is invented — so the lever that most improves "matches exactly" is capture
+coverage, and the second is an inpainter that continues the surrounding real pixels.
+A generative world model improves neither: it would repaint what we already measured, or
+guess prettily at what nobody saw.
+
+### What was built
+
+[`inpaint.py`](../../workers/reconstruction/inpaint.py), at the `complete()` boundary
+rather than the panorama boundary — no depth encoding, no equirectangular convention and
+no registration, which is three fewer things to be wrong. Tiled to 1024px windows and
+pasted back at full resolution, because rescaling a 4m wall to fill one corner would
+soften every real pixel on it. Hole-only paste, observed texels re-checked, bounded tile
+count, an explicit call ceiling with no default, and jump-flood retained on every failure
+path. Thirteen offline checks cover tiling determinism, the hole-only paste, a filler that
+edits outside its mask, a filler that throws, and a hole too small to be worth a call.
+
+Off unless `INPAINT_PROVIDER` names one. This does not close M8.5: it is the baseline any
+world model would have to beat, which is what the milestone asked for.
+
 ## Completion evidence record
 
 - Research date and sources: **2026-09-19; linked above**.
-- M8 baseline commit/build/device/OS: **not recorded**.
-- Provider/account policy approval and spending ceiling: **not recorded**.
-- Frozen cases, hashes, reference capture permissions, and evaluation route: **not recorded**.
-- Candidate configuration/model/weight identifiers: **not recorded**.
-- Adapter/integration commit and local verification commands: **not recorded**.
-- All-run ledger, billed cost, timings, sizes, and failures: **not recorded**.
-- Geometry/projection checks and blinded visual scores: **not recorded**.
-- Device recordings, FPS/memory/freshness, and recovery results: **not recorded**.
-- Cleanup and unresolved provider retention findings: **not recorded**.
-- Decision, rationale, reviewer/date, and revisit trigger if deferred: **not recorded**.
-- M9 selected adapter and fallback configuration: **not recorded**.
+- M8 baseline commit/build/device/OS: **implementer-reported working on device 2026-09-19;
+  hardware and measurements not recorded.** Final comparisons still require the formal M8
+  acceptance evidence; only the synthetic preparation above proceeded without it.
+- Provider/account policy approval and spending ceiling: **not recorded — no account, no
+  approval, no ceiling set, and the client refuses to construct without one.**
+- Frozen cases, hashes, reference capture permissions, and evaluation route: **four cases
+  frozen, manifest hash `572732196d417f97`, seeds 0/1/2 predeclared, prompt hash
+  `ca24ff4a2fd91f54`. All four are synthetic; zero real captures, so no capture permission
+  was needed or sought.** Regenerate with `npm run cases`.
+- Candidate configuration/model/weight identifiers: **`synthetic-appearance-v1`
+  (`synthetic/axis`) and `synthetic-inpainter` (`mean-of-observed`) only. No external
+  model has been contacted and billed cost is zero. `OpenAIInpainter` is implemented and
+  requires `INPAINT_PROVIDER=openai`, an explicit `INPAINT_MODEL`, and a positive
+  `INPAINT_MAX_CALLS` before it will construct.**
+- Adapter/integration commit and local verification commands: **working tree at time of
+  writing.** `npm run typecheck` clean; `npm run gate` → **56/56** app, **9/9** server,
+  worker self-test PASS, appearance self-test **37/37**;
+  `npx expo export --platform ios --no-bytecode` succeeds.
+- All-run ledger, billed cost, timings, sizes, and failures: **no provider run has been
+  attempted; billed cost is zero.** End-to-end through the real pipeline with the synthetic
+  provider: 515,726 hole texels, 510,840 filled (99.05%), 4,886 left on baseline as occluded
+  or unknown, observed texels preserved, atlas stddev 54.5 → 61.6 with registration
+  unchanged at 0.3cm.
+- Geometry/projection checks and blinded visual scores: **projection checks pass (23/23):
+  direction↔pixel inverse to 2.5e-13 px; floor, three walls and the corner diagonal within
+  2cm of known distances; a ray through the window returns unknown while the wall below the
+  sill stays solid to 4mm; 16-bit depth round-trips to 0.026mm; reprojected texels hold the
+  colour for their own direction to within 0.97/255. The convention verifier passes its own
+  three properties. No visual scoring — that needs a real provider.**
+- Device recordings, FPS/memory/freshness, and recovery results: **not recorded.**
+- Cleanup and unresolved provider retention findings: **not applicable; nothing uploaded.
+  The retention questions in the risks section above remain unresolved and must be settled
+  before any real-room capture leaves the device.**
+- Decision, rationale, reviewer/date, and revisit trigger if deferred: **not decided.** The
+  engineering that both the adopt and the reject path need is done; the decision needs
+  provider access, a spending approval, and a data-handling decision.
+- M9 selected adapter and fallback configuration: **baseline-only. The appearance stage is
+  off unless `APPEARANCE_PROVIDER` names a provider, and the baseline is returned unchanged
+  on every failure path.**

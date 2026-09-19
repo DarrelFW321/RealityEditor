@@ -407,8 +407,12 @@ function describePlan(
     .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([family, n]) => `${n} ${family}${n === 1 ? '' : 's'}`)
     .join(', ');
-  const parts = [made ? `Placed ${made}` : 'Nothing to place'];
+  const parts: string[] = [];
+  if (made) parts.push(`Placed ${made}`);
+  if (recipe.hideMeasuredIds.length)
+    parts.push(`hid ${recipe.hideMeasuredIds.length} measured object(s) from view`);
   if (removals.length) parts.push(`removed ${removals.length}`);
+  if (!parts.length) parts.push('Nothing to place');
   if (recipe.palette?.walls) parts.push('repainted the walls');
   if (deviations.length) parts.push(`${deviations.length} change(s) from what you asked`);
   return `${parts.join('; ')}.`;

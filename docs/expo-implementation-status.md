@@ -850,6 +850,150 @@ placed member-by-member by candidate search rather than solved for even spacing,
 `evenly_spaced` is exact only for wall groups; the construction envelopes and bracing
 factors are authored estimates and every result says so.
 
+## M8.5 world-model evaluation — frozen cases and the isolated adapter
+
+M8.5 is a **research milestone whose deliverable is a decision**, and its own text says
+"shipping a world model is not required to complete M9." Two of its six steps can be done
+with no provider, no money and no data leaving the repository, and both are required for
+the adopt path *and* the reject path. Those are done. The comparison, the device run and
+the decision are not.
+
+### What it can and cannot improve
+
+It changes exactly one thing: the texture invented for wall and floor texels **no camera
+ever saw**, revealed when furniture is erased. It is barred by its own scope from touching
+scanning, placement, objects, collisions, transactions or undo — "generated furniture
+painted into a texture is not an editable object and is a failure for this empty-room use
+case." Anyone expecting a world model to make the whole editor feel better is expecting the
+wrong thing from this milestone.
+
+### The contract had to grow, once
+
+`ReconstructionRoomSchema` carried walls and floors and nothing else, so the worker had no
+idea where a window was. Route A renders a depth panorama from the measured shell, and the
+milestone requires it to respect openings — without them a ray through the glass returns
+*wall distance*, which is precisely the input that would condition a generator to paint a
+wall over the window. `openings` now travels with the room, optional with a default, so a
+payload written before M8.5 still validates.
+
+### The adapter cannot cheat, by construction rather than by care
+
+Three rules are enforced mechanically because each is a way the experiment could quietly
+flatter itself:
+
+- **Hole-only.** Candidate colour is applied where `weight <= 0`. Observed texels are then
+  *compared* against baseline and the whole result is discarded if a single one moved. A
+  provider that can repaint the room could score well against itself.
+- **No geometry.** The adapter is handed atlases and returns pixels. It is never given
+  anywhere to put a vertex, a collider or an object.
+- **Provenance survives.** Every filled texel is inferred and the filling provider is named
+  in the stage report.
+
+Any failure — wrong size, occluded texel, provider silence — returns the baseline list
+*unchanged, as the same objects*, so a caller can assert identity.
+
+### It cannot bill you by accident
+
+Three independent deliberate acts stand between the code and a charge: naming the provider,
+a human flipping `PROVIDER_CONVENTION_VERIFIED` after checking the provider's own depth
+example, and setting `WORLDLABS_CEILING_CREDITS` — which has no default, because a default
+ceiling is a ceiling nobody chose. The ledger reserves the worst case before a request
+leaves and treats an *ambiguous* outcome as billed, since an accepted-then-lost POST may
+well have been charged.
+
+### Synthetic evidence, because the milestone asks for it first
+
+The projection is proven on a room whose distances are known exactly, with a provider whose
+panorama is a known function of direction — so a texel landing in the wrong place shows up
+as the wrong colour rather than as a plausible wall. Direction↔pixel inverts to 2.5e-13 px;
+floor, three walls and the corner diagonal land within 2cm; a ray through the window returns
+**unknown** while the wall below the sill stays solid to 4mm; 16-bit depth round-trips to
+0.026mm; every reprojected texel holds the colour for its own direction to 0.97/255.
+
+End to end through the real pipeline with the synthetic provider: 515,726 hole texels,
+510,840 filled (99.05%), 4,886 correctly left on baseline as occluded or unknown, observed
+texels preserved, atlas stddev 54.5 → 61.6 with registration unchanged at 0.3cm.
+
+### Two of my own assertions were wrong before the code was
+
+The self-test failed twice on checks I had written badly, and both were worth keeping as
+comments. Latitude **clamps** where longitude wraps — wrapping it sent straight-down to the
+top row, so the floor read as unknown. And rays through the *lower half* of a window point
+slightly downward and are legitimately unknown, so "nothing below the horizon is unknown"
+was false; the real invariant is that the unknown band sits inside the window's azimuth.
+
+### The world model was researched and not adopted
+
+The requirement was that a revealed wall **match the real wall**. World Labs cannot:
+`depth_to_rgb` takes depth plus a *text prompt* with no reference image and no mask, and
+world generation accepts only `azimuth` per photo — not the 6-DoF poses and intrinsics
+ARKit already gives us. Their own description is growing "a scene outward from a single
+specified viewpoint rather than conditioning on a global reference image". Backboard is
+worse for this: their docs say outright that "a base image is not a mask or a guarantee
+of pixel-preserving edits", so it fails the observed-preservation gate by construction.
+
+The number that settled it: the north wall is already **91% observed** and the floor goes
+**57% → 90%** once furniture is not in the way. Most of what is behind a sofa was
+genuinely photographed from another angle, and the projector already places those real
+pixels. Only the residual is invented — so coverage is the first lever and a masked
+inpainter is the second. A generative world model is neither.
+
+`inpaint.py` sits at the `complete()` boundary, not the panorama boundary: no depth
+encoding, no equirect convention, no registration. Tiled to 1024px and pasted back at
+full resolution, because rescaling a 4m wall to fill one corner softens every real pixel
+on it. Hole-only paste with the observed region re-checked afterwards, so a model that
+paints outside its mask is recorded and still cannot change the wall. Jump-flood stays on
+every failure path.
+
+### M8.5 evidence
+
+`npm run gate` → **56/56** app, **9/9** server, worker self-test PASS, appearance self-test **37/37**. Typecheck clean, iOS bundle builds. `npm run cases` freezes four cases at manifest
+hash `572732196d417f97` with seeds 0/1/2 predeclared.
+
+**Not done, and named:** no provider has been contacted and billed cost is zero; the
+equirectangular convention is self-consistent but **unverified against the provider's own
+example**; the room contract has no ceiling, so 76% of the upper hemisphere is unconditioned
+input; all four cases are **synthetic**, and two want real captures the visual-benefit gate
+cannot be scored without; route B is not implemented; and no adopt/defer/reject decision has
+been made.
+
+## The reconstruction chain, end to end
+
+Every piece of this was individually green while the chain as a whole was dead. The app
+uploads keyframes and requests a reconstruction automatically after a scan; the server
+validates and proxies; the worker builds the atlas. But `RECONSTRUCTION_WORKER_URL` was
+unset, so `store.begin()` refused every job with `provider_not_configured`, no shell was
+ever produced, and the compositor — correctly — painted nothing. "Delete this" committed
+the intent and the camera kept showing the furniture.
+
+Nothing hermetic could have caught that. The server gate asserts the *refusal* is clean,
+the worker self-test exercises the pipeline directly, and both pass with the two never
+having spoken to each other. So `tools/reconstruct-e2e.py` now drives the real HTTP path
+end to end: create calibration → upload six keyframes → reconstruct → poll → fetch assets
+→ delete. It needs two live services, which is exactly why it is not in `npm run gate`.
+
+Measured on the synthetic room, both models enabled:
+
+```
+reconstruct            25.6s
+atlas.png              2048x1024, 1.47MB, stddev 53.9
+shell.json             2 surfaces, floor 57% observed, north wall 91% observed
+segmentation           sam        1,219,971 geometric px + 984,095 model px
+completion             lama
+cleanup                204
+```
+
+Configuration that makes the difference, in `server/.env`:
+
+```
+RECONSTRUCTION_WORKER_URL=http://127.0.0.1:8788
+RECONSTRUCTION_WORKER_TOKEN=devtoken
+```
+
+and on the worker, optionally, `SAM_WEIGHTS` and `LAMA_WEIGHTS` — both already on disk.
+Unset, segmentation falls back to geometric masks and completion to jump-flood, which is
+the default the gate runs against.
+
 ## Worker integration
 
 Set `RECONSTRUCTION_WORKER_URL` and `RECONSTRUCTION_WORKER_TOKEN` on Fastify only. The worker receives a POST with calibration ID/revision/frame ID and aligned keyframes containing camera metadata and JPEG data. It returns:

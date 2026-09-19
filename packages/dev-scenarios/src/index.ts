@@ -23,6 +23,7 @@ function state(measured: Rsg, design: Rsg, removedPhysicalIds: string[]): Editor
     removedPhysicalIds,
     removalMaskIds: [],
     removalMaskCalibration: null,
+    maskVolumes: [],
     // M7 envelope v2. Explicit rather than defaulted so a fixture reads the same way a
     // real session does: a sample room starts with no groups, it does not omit the field.
     groups: {},

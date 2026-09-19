@@ -41,6 +41,7 @@ export * from './coverage';
 export * from './derived';
 export * from './scp';
 export * from './layout';
+export * from './erasure';
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
@@ -394,6 +395,16 @@ export class SpatialEngine {
               keepPose: true,
             }
           : null;
+      }
+      case 'mask': {
+        const existing = scene.maskVolumes.find((v) => v.id === command.id);
+        return existing
+          ? { type: 'mask', ...copy(existing) }
+          : { type: 'unmask', targetId: command.id };
+      }
+      case 'unmask': {
+        const existing = scene.maskVolumes.find((v) => v.id === command.targetId);
+        return existing ? { type: 'mask', ...copy(existing) } : null;
       }
       case 'paint': {
         const surface = scene.design.surfaces.find((s) => s.id === command.targetId);
@@ -826,6 +837,10 @@ export class SpatialEngine {
       return this.result('rejected', 'Apply a restyle through its proposal.', {
         refusal: 'invalid_parameters',
       });
+    // A mask volume is not an object, so it has no place in a carry transaction; it
+    // goes straight to `batch`, which is the only writer of committed state here.
+    if (command.type === 'mask' || command.type === 'unmask')
+      return this.batch([command], operationId, revision);
 
     // An edit during a carry joins that transaction; it never starts a competing writer.
     if (this.transaction) {
@@ -1041,6 +1056,36 @@ export class SpatialEngine {
         candidate.design.objects.push(copy(command.object));
         candidate.assemblies[command.object.id] = copy(command.assembly);
         changed.set(command.object.id, ASPECTS.add!);
+        continue;
+      }
+      if (command.type === 'mask') {
+        // Same id twice replaces, so adjusting a box is one op rather than a
+        // remove-then-add pair that would undo in two steps.
+        const volume = {
+          id: command.id,
+          label: command.label,
+          center: [...command.center] as Vec3,
+          size: [...command.size] as Vec3,
+          yaw: command.yaw,
+          hidden: command.hidden,
+        };
+        const at = candidate.maskVolumes.findIndex((v) => v.id === command.id);
+        if (at >= 0) candidate.maskVolumes[at] = volume;
+        else {
+          if (candidate.maskVolumes.length >= 16)
+            return this.result('rejected', 'That is as many masked areas as I can hold.', {
+              refusal: 'invalid_parameters',
+            });
+          candidate.maskVolumes.push(volume);
+        }
+        continue;
+      }
+      if (command.type === 'unmask') {
+        if (!candidate.maskVolumes.some((v) => v.id === command.targetId))
+          return this.result('rejected', 'There is no masked area by that name.', {
+            refusal: 'unknown_target',
+          });
+        candidate.maskVolumes = candidate.maskVolumes.filter((v) => v.id !== command.targetId);
         continue;
       }
       if (command.type === 'paint') {

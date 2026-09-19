@@ -12,7 +12,7 @@ import type {
   EditResult,
 } from '@reality/contracts';
 import { isAmbiguous } from '@reality/spatial-engine';
-import { recipeTool, voiceTool } from '../runtime/editor';
+import { recipeTool, voiceTool, VOICE_INSTRUCTIONS } from '../runtime/editor';
 import type { InputCoordinator } from '../runtime/coordinator';
 
 export class RealtimeVoice implements VoiceAdapter {
@@ -123,8 +123,7 @@ export class RealtimeVoice implements VoiceAdapter {
                 },
               },
             },
-            instructions:
-              'You control a spatial editor. Use edit_room for single changes and restyle_room for a whole arrangement. Use supplied interaction_context and spatial_context, never guess coordinates or targets. Ask if context is missing. Report the tool result faithfully, including any adjustment or caveat. Unknown structural support means it is not verified. For a follow-up to something you created, call edit_room with action "group_edit" and the group id, so the same objects change rather than new ones appearing.',
+            instructions: VOICE_INSTRUCTIONS,
           },
         });
         this.status('Voice connected. Point, then speak.');
@@ -228,6 +227,9 @@ export class RealtimeVoice implements VoiceAdapter {
                 interaction_context: context,
                 spatial_context: scp,
                 ambiguous: scp ? isAmbiguous(scp) : false,
+                // Mask boxes are not scene objects and appear in neither list above.
+                // Without this the model cannot name the box it just placed.
+                mask_areas: this.input.masks(),
               }),
             },
           ],

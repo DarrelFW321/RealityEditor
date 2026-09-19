@@ -198,7 +198,27 @@ export class InputCoordinator {
       frameId: scene.frameId,
       selectedId: this.selectedId,
       destination: this.destination,
+      // Carried so a mask box can be placed with nothing selected and nothing pointed
+      // at. Null in the development room, where there is no tracked camera.
+      viewer: this.view
+        ? { position: [...this.view.position], forward: [...this.view.forward] }
+        : null,
     };
+  }
+
+  /**
+   * The mask boxes, for the model to refer to by id.
+   *
+   * They are not scene objects, so they appear in neither the object list nor the
+   * spatial context — which left the assistant unable to name the box it had just
+   * placed, and reporting that it had no target id for it.
+   */
+  masks() {
+    return this.editor.engine.getSnapshot().scene.maskVolumes.map((v) => ({
+      id: v.id,
+      hidden: v.hidden,
+      size_m: v.size.map((n) => Number(n.toFixed(2))),
+    }));
   }
 
   /** Pushes a sample into attention history. Called on a timer, not only on change, so a
@@ -324,6 +344,11 @@ export class InputCoordinator {
         frameId: record.frameId,
         selectedId: record.selectedId,
         destination: record.destination,
+        // Same viewer pose the live snapshot carries, so a turn-bound command can
+        // place a mask box with nothing identified.
+        viewer: this.view
+          ? { position: [...this.view.position], forward: [...this.view.forward] }
+          : null,
       },
     };
   }
@@ -373,6 +398,12 @@ export class InputCoordinator {
       });
       const result = await this.editor.intent(intent, context);
       this.editor.engine.attribute({ turnId: null, source: 'system' });
+      // An action that resolved a target ADOPTS it as the selection. `select` and
+      // `mask_area` both return one and this was dropping it, so "select the chair"
+      // selected nothing and a freshly placed mask box could not be referred to as
+      // "it" on the next turn.
+      const resolved = (result as { selectedId?: string }).selectedId;
+      if (typeof resolved === 'string' && resolved) this.select(resolved, options.source ?? 'system');
       // A confirmation belongs to the operation that asked for it, so remember which one
       // this turn is waiting on.
       if (turnId && result.refusal === 'awaiting_confirmation') {

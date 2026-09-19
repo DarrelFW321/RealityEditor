@@ -118,6 +118,42 @@ async function settle(h: Harness, id: string, jobId: string, auth: Record<string
 
 const scenarios: { id: string; title: string; run: () => Promise<StepResult[]> }[] = [
   {
+    id: 'inpaint-validation',
+    title: 'The erase route validates before it spends anything',
+    run: async () => {
+      const steps: StepResult[] = [];
+      const h = await harness();
+      try {
+        // DELIBERATELY ONLY THE REFUSALS. A valid body reaches a real provider — the
+        // local worker if one is running, a billed image model otherwise — and a gate
+        // that quietly makes paid API calls is a gate nobody can run. What is asserted
+        // is the part that must hold before either is touched.
+        const ask = (payload: Record<string, unknown>) =>
+          h.app.inject({ method: 'POST', url: '/inpaint', payload });
+
+        const empty = await ask({});
+        steps.push(check('a body with no image is refused', empty.statusCode === 400, `HTTP ${empty.statusCode}`));
+        steps.push(check('and says why', (empty.json() as { error?: string }).error === 'invalid_inpaint_request', JSON.stringify(empty.json())));
+
+        const notBase64 = await ask({ imageBase64: '*'.repeat(128) });
+        steps.push(check('a non-base64 image is refused', notBase64.statusCode === 400, `HTTP ${notBase64.statusCode}`));
+
+        const tiny = await ask({ imageBase64: 'QUJD' });
+        steps.push(check('an image too small to be a frame is refused', tiny.statusCode === 400, `HTTP ${tiny.statusCode}`));
+
+        const outOfRange = await ask({ imageBase64: 'QQ'.repeat(64), region: { x0: -1, y0: 0, x1: 2, y1: 1 } });
+        steps.push(check('a region outside the frame is refused', outOfRange.statusCode === 400, `HTTP ${outOfRange.statusCode}`));
+
+        const unknownField = await ask({ imageBase64: 'QQ'.repeat(64), quality: 'high' });
+        steps.push(check('an unknown field is refused rather than ignored', unknownField.statusCode === 400, `HTTP ${unknownField.statusCode}`));
+      } finally {
+        await h.app.close();
+        await rm(h.root, { recursive: true, force: true });
+      }
+      return steps;
+    },
+  },
+  {
     id: 'recon-roundtrip',
     title: 'A calibration completes end to end',
     run: async () => {

@@ -53,6 +53,34 @@ export const config = {
   },
 
   /**
+   * One-shot frame inpainting for live erasure.
+   *
+   * No default model id: image model ids move, and an omitted one is an unrecorded
+   * experiment. Unset means POST /inpaint reports `not_configured` rather than
+   * guessing, and the device falls back to filling from surrounding colour.
+   */
+  inpaint: {
+    /**
+     * The local reconstruction worker, which is the preferred path.
+     *
+     * It segments the object inside the box and fills only those pixels, so what comes
+     * back is mask-respecting BY CONSTRUCTION rather than by asking an endpoint nicely
+     * — and it costs nothing, leaves no frame of the user's room with a third party,
+     * and answers in seconds rather than a minute. Backboard stays behind it as a
+     * fallback for deployments with no worker.
+     */
+    workerURL: process.env.RECONSTRUCTION_WORKER_URL ?? "",
+    workerToken: credential("RECONSTRUCTION_WORKER_TOKEN"),
+    /** Backboard's own key. Never leaves this process. */
+    key: credential("BACKBOARD_API_KEY"),
+    baseURL: process.env.BACKBOARD_BASE_URL ?? "https://app.backboard.io/api",
+    /** Both required by the image tool; neither has a usable default. */
+    imageProvider: process.env.INPAINT_IMAGE_PROVIDER ?? "",
+    model: process.env.INPAINT_MODEL ?? "",
+    timeoutMs: Number(process.env.INPAINT_TIMEOUT_MS ?? 90_000),
+  },
+
+  /**
    * The style planner. Off the critical path: 2-3s is fine because a "thinking"
    * animation covers it. Effort is held low for that reason, not to save money.
    */

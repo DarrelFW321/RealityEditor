@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from 'react';
 import {
   AppState,
   Button,
@@ -30,6 +30,11 @@ import {
 import type { ReconstructionPhase } from '../runtime/reconstruction';
 import { textureBridgeAvailable } from '../adapters/frame-textures';
 import type { FrameDiagnosticMode, FrameDiagnosticSample } from './NativeFrameDiagnostic';
+import type { CompositorSample } from './CompositorView';
+import { erasureVolumes, retainedVolumes } from '@reality/spatial-engine';
+import { PatchStore } from '../runtime/patches';
+import { frameCaptureAvailable, nativeFrameCapture } from '../adapters/frame-textures';
+import { apiURL } from '../runtime/api-url';
 
 export function EditorPanel({
   editor,
@@ -39,6 +44,7 @@ export function EditorPanel({
   spatialOwner,
   onSaveCapture,
   reconstruction,
+  depthInputs,
   onExit,
 }: {
   editor: Editor;
@@ -52,6 +58,8 @@ export function EditorPanel({
   onSaveCapture?: () => string;
   /** Empty-room reconstruction, which runs behind the editor after a capture. */
   reconstruction?: ReconstructionPhase;
+  /** What the native side said about scene depth, or null before it has spoken. */
+  depthInputs?: { ok: boolean; reason: string } | null;
   onExit: () => void;
 }) {
   const snapshot = useSyncExternalStore(editor.engine.subscribe, editor.engine.getSnapshot);
@@ -70,6 +78,120 @@ export function EditorPanel({
   // measured room is the working surface, and the shell is something you turn on to look
   // at rather than something that silently replaces what you were editing against.
   const [showShell, setShowShell] = useState(false);
+  // State, not a ref: this is the line that answers "why are the pixels not
+  // changing", so it has to re-render when it changes.
+  const [compositorSample, setCompositorSample] = useState<CompositorSample | null>(null);
+  /**
+   * Inpainted wall patches. One per hidden box, requested when the box is hidden and
+   * dropped whenever its geometry changes — see `PatchStore.reconcile`.
+   */
+  const patchStore = useRef<PatchStore | null>(null);
+  const [patches, setPatches] = useState<ReturnType<PatchStore['ready']>>([]);
+  const [patchNote, setPatchNote] = useState<string | null>(null);
+  /**
+   * What live erasure should remove this frame, derived from committed state.
+   *
+   * Recomputed from the snapshot rather than accumulated, so undo, a cancelled drop and
+   * tracking loss all restore the original appearance with no compositor bookkeeping
+   * (M8-D.3/D.5). A carry is included transiently while it is held.
+   */
+  const erasure = useMemo(() => {
+    const scene = snapshot.previewScene ?? snapshot.scene;
+    const volumes = erasureVolumes(scene, { carriedId: snapshot.preview?.targetId ?? null });
+    return volumes.length ? { volumes, retained: retainedVolumes(scene, volumes) } : null;
+  }, [snapshot.scene, snapshot.previewScene, snapshot.preview]);
+
+  useEffect(() => {
+    if (!frameCaptureAvailable()) {
+      // Silent until now, and it is the one cause the user cannot deduce from the
+      // screen: an older development binary has no `captureFrame`, so no patch is ever
+      // requested and hiding a box commits without covering anything.
+      setPatchNote('This app build cannot capture frames, so masked areas cannot be filled in. Rebuild the development client.');
+      return;
+    }
+    const store = new PatchStore(apiURL(), nativeFrameCapture);
+    patchStore.current = store;
+    const unsubscribe = store.subscribe((_id, state) => {
+      setPatches(store.ready());
+      if (state.state === 'failed') setPatchNote(state.reason);
+      // A ready patch is covering the box either way. Its note says only why the fill
+      // is the local one rather than the model's, which is a caveat, not a failure.
+      if (state.state === 'ready') setPatchNote(state.note ?? null);
+    });
+    return () => {
+      unsubscribe();
+      store.dispose();
+      patchStore.current = null;
+      setPatches([]);
+    };
+  }, []);
+
+  /**
+   * Requests a patch for every hidden box that does not have a current one.
+   *
+   * Driven by the committed scene rather than by the hide action, so it also recovers
+   * a patch after undo/redo and drops one the moment a box is moved or resized —
+   * there is no second place tracking which boxes are hidden.
+   */
+  useEffect(() => {
+    const store = patchStore.current;
+    if (!store) return;
+    const scene = snapshot.scene;
+    // Both deliberate "stop showing this" intents: a box the user drew, and a scanned
+    // object they deleted. `moved` and `removed` are excluded because they follow from
+    // an edit rather than from an erasure the user asked for, and `carried` changes
+    // every frame — each would spend a capture and an inference call on a region
+    // nobody asked to have filled.
+    const wanted = erasureVolumes(scene).filter(
+      (v) => v.reason === 'manual' || v.reason === 'hidden',
+    );
+    const missing = store.reconcile(wanted, scene.frameId);
+    setPatches(store.ready());
+    for (const volume of missing) void store.request(volume, scene);
+  }, [snapshot.scene]);
+
+  /**
+   * Why erasure is or is not happening, in one line.
+   *
+   * Something is marked for erasure and the screen does not change is the single most
+   * confusing state this feature has, and until now it was silent — which is what left
+   * the assistant improvising an explanation for it. The commit always succeeds; only
+   * the PAINTING can fail, and that distinction belongs on screen.
+   *
+   * IT LEADS WITH THE PATCHES, because a patch is what actually covers a box. This line
+   * used to report only the compositor, so it called the whole feature dead whenever the
+   * native texture bridge was absent — while a patch was, or could have been, covering
+   * the box perfectly well. The compositor is reported after, as the addition it is.
+   */
+  const erasureStatus = useMemo(() => {
+    const count = erasure?.volumes.length ?? 0;
+    if (!count) return null;
+    const noun = `${count} region${count === 1 ? '' : 's'}`;
+    if (!frame) return `${noun} hidden. Filling them in needs the camera.`;
+    if (patches.length) {
+      const generated = patches.filter((p) => p.fill === 'inpaint').length;
+      const source =
+        generated === patches.length
+          ? 'a generated background'
+          : generated
+            ? `${generated} generated, the rest from the surrounding wall`
+            : 'the surrounding wall';
+      return `Covering ${patches.length} of ${noun} with ${source}.`;
+    }
+    // Nothing covered yet. Each of the following was true at some point while the
+    // pixels did not move, and naming which one is false is the difference between
+    // debugging this from a device and guessing at it.
+    const s = compositorSample;
+    if (!s) return `${noun} hidden. Capturing the wall behind — point the camera at it.`;
+    if (!s.frame)
+      return `${noun} hidden. The compositor is running but receiving no camera frames (rejected ${s.rejected}, errors ${s.errors}).`;
+    if (!s.depth)
+      return `${noun} hidden. No scene depth${
+        depthInputs && !depthInputs.ok ? ` — ${depthInputs.reason}` : ''
+      }, so only a drawn box can be bounded.`;
+    const source = s.atlas ? 'the reconstructed background' : 'surrounding wall and floor colour';
+    return `Erasing ${s.erased} region(s) from ${source} · frame ${Math.round(s.ageMs)}ms · ${s.planes} shell plane(s)${s.foreground ? '' : ' · no person mask'}${s.errors ? ` · ${s.errors} error(s)` : ''}`;
+  }, [erasure, frame, patches, compositorSample, depthInputs]);
   const [frameDiagnostic, setFrameDiagnostic] = useState<FrameDiagnosticMode>('off');
   const nativeFrameSample = useRef<FrameDiagnosticSample | null>(null);
   /** M7.6.5: planning progress is its OWN indicator. A layout search takes long enough
@@ -140,6 +262,7 @@ export function EditorPanel({
     frameId: snapshot.scene.frameId,
     selectedId: selected,
     destination,
+    viewer: null,
   });
   const sync = (patch: Partial<InteractionContext> = {}) => {
     context.current = { ...context.current, timestamp: Date.now(), ...patch };
@@ -319,7 +442,7 @@ export function EditorPanel({
     try {
       await slot.current.replace(() => {
         return new RealtimeVoice(
-          process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8787',
+          apiURL(),
           editor.diagnostics,
           input.current,
           setMessage,
@@ -366,8 +489,12 @@ export function EditorPanel({
           diagnostics={dev}
           frameDiagnostic={dev ? frameDiagnostic : 'off'}
           onFrameDiagnostic={sample => { nativeFrameSample.current = sample; }}
-          shell={showShell && reconstruction?.state === 'ready' ? reconstruction.shell : null}
+          shell={reconstruction?.state === 'ready' ? reconstruction.shell : null}
+          showShell={showShell}
           atlasUri={reconstruction?.state === 'ready' ? reconstruction.atlasUri : null}
+          erasure={erasure}
+          patches={patches}
+          onCompositor={setCompositorSample}
           onRenderFps={(fps) => {
             renderFps.current = fps;
           }}
@@ -423,6 +550,8 @@ export function EditorPanel({
             {caveat}
           </Text>
         ))}
+        {erasureStatus && <Text style={styles.detail}>{erasureStatus}</Text>}
+        {patchNote && <Text style={styles.detail}>{patchNote}</Text>}
         {planning && <Text style={styles.detail}>{planning}</Text>}
         {proposal && (
           <View style={styles.row}>
@@ -471,6 +600,17 @@ export function EditorPanel({
               <Text style={styles.text}>+ {family}</Text>
             </Pressable>
           ))}
+          <Pressable
+            style={styles.chip}
+            onPress={() => void run({ action: 'mask_area' })}
+          >
+            <Text style={styles.text}>◻ mask area</Text>
+          </Pressable>
+          {snapshot.scene.maskVolumes.length > 0 && (
+            <Pressable style={styles.chip} onPress={() => void run({ action: 'unmask_area' })}>
+              <Text style={styles.text}>✕ unmask</Text>
+            </Pressable>
+          )}
           <Pressable
             style={styles.chip}
             disabled={planning !== null}

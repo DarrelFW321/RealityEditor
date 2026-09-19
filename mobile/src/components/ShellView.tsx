@@ -13,10 +13,30 @@ import type { Shell } from '@reality/contracts';
  * pixels, so in AR the real furniture is still visible behind it; that is M8's work and
  * the PRD is explicit that the two are not the same thing.
  */
-export function ShellView({ shell, atlasUri }: { shell: Shell; atlasUri: string | null }) {
+export function ShellView({
+  shell,
+  atlasUri,
+  visible = true,
+  onAtlas,
+}: {
+  shell: Shell;
+  atlasUri: string | null;
+  /** The "Show empty room" comparison. Mounted either way so the atlas still loads
+   * for the compositor: M8-D.6 keeps that comparison distinct from live erasure. */
+  visible?: boolean;
+  /** Reports the loaded atlas so the compositor can sample the same upload rather
+   * than loading a second copy of the same image into a second GL texture. */
+  onAtlas?: (texture: Texture | null) => void;
+}) {
   const [loadedAtlas, setLoadedAtlas] = useState<{ uri: string; texture: Texture } | null>(null);
   // Do not render the previous room's texture while a new atlas is loading.
   const texture = loadedAtlas?.uri === atlasUri ? loadedAtlas.texture : null;
+  useEffect(() => {
+    onAtlas?.(texture);
+    // Reported as gone on unmount, so a compositor cannot keep sampling a texture
+    // whose owner has been disposed.
+    return () => onAtlas?.(null);
+  }, [texture, onAtlas]);
 
   useEffect(() => {
     setLoadedAtlas(null);
@@ -77,7 +97,7 @@ export function ShellView({ shell, atlasUri }: { shell: Shell; atlasUri: string 
 
   if (!texture) return null;
   return (
-    <group>
+    <group visible={visible}>
       {geometries.map(({ surface, geometry }) => (
         <mesh key={surface.id} geometry={geometry}>
           {/* Unlit: the atlas already contains the room's own baked lighting, so lighting

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from inpaint import filler_from_env, run as inpaint_run
 from project import SurfaceAtlas
 
 
@@ -53,8 +54,18 @@ def lama(atlas: SurfaceAtlas, weights: str) -> np.ndarray | None:
         return None
 
 
-def complete(atlases: list[SurfaceAtlas], weights: str | None) -> tuple[list[np.ndarray], str]:
-    """Returns (filled RGB per surface, which implementation ran)."""
+def complete(
+    atlases: list[SurfaceAtlas], weights: str | None
+) -> tuple[list[np.ndarray], str, object | None]:
+    """
+    Returns (filled RGB per surface, which implementation ran, inpaint report or None).
+
+    A third, OPTIONAL implementation sits after the other two: a masked edit model that
+    can see the observed pixels surrounding each hole. It runs only when
+    `INPAINT_PROVIDER` names one, it can only touch texels the projector marked
+    unobserved, and every failure path returns the deterministic result unchanged — so
+    the worker without it behaves exactly as it always has.
+    """
     method = "jump-flood"
     filled: list[np.ndarray] = []
     for atlas in atlases:
@@ -62,4 +73,11 @@ def complete(atlases: list[SurfaceAtlas], weights: str | None) -> tuple[list[np.
         if result is not None:
             method = "lama"
         filled.append(result if result is not None else jump_flood(atlas))
-    return filled, method
+
+    filler = filler_from_env()
+    if filler is None:
+        return filled, method, None
+    refined, report = inpaint_run(atlases, filled, filler)
+    if report.applied:
+        method = f"{method}+{report.provider}"
+    return refined, method, report

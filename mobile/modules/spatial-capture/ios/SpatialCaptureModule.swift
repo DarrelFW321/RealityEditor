@@ -22,6 +22,10 @@ public class SpatialCaptureModule: Module {
     AsyncFunction("releaseTextureFrame") { (leaseId: String) in
       self.frameTextures.release(lease: leaseId)
     }.runOnQueue(.main)
+    AsyncFunction("captureFrame") { (promise: Promise) in
+      guard let view = self.activeView else { promise.resolve(nil); return }
+      view.captureFrame(promise: promise)
+    }
     AsyncFunction("invalidateTextureFrames") {
       self.activeView?.invalidateTextureFrames()
     }.runOnQueue(.main)
@@ -319,7 +323,17 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
         let encoded = try JSONSerialization.data(withJSONObject: ["id": room.identifier.uuidString, "surfaces": surfaces, "objects": objects])
         let json = String(data: encoded, encoding: .utf8) ?? "{}"
         await MainActor.run {
-          guard self.generation == epoch else { return }
+          // A superseded scan's result is dropped, but NOT silently: this used to
+          // return with `mode` left on "processing", so the view stayed on
+          // "Building the room…" for the rest of the session with no way back.
+          guard self.generation == epoch else {
+            if self.mode == "processing" {
+              self.mode = "failed"
+              self.onStatus(["code": "failed",
+                "message": "That scan was superseded before it finished building. Start a new scan."])
+            }
+            return
+          }
           self.mode = "edit"
           self.onStatus(["code": "camera_owner", "message": "Tracked editing retained the RoomPlan AR session."])
           self.onRoom(["roomJSON": json, "frameId": self.frameId])
@@ -580,6 +594,63 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
     }
   }
 
+  /**
+   One photograph of the room right now, with the pose and projection that took it.
+
+   Distinct from the keyframe sweep, which only runs while RoomPlan is measuring and
+   emits on a fixed 45-degree cadence. Live erasure needs a frame at the moment the
+   user asks, from wherever they happen to be standing.
+
+   PNG, not JPEG: this is sent to an image model and comes back as a replacement, and
+   JPEG ringing around a high-contrast edge is exactly the kind of artefact that
+   survives into the patch. `projection` travels alongside `cameraToWorld` because the
+   caller has to project the masked box into this image and cannot reconstruct the
+   frustum from intrinsics alone once the display transform is involved.
+   */
+  func captureFrame(promise: Promise) {
+    guard mode == "edit", UIApplication.shared.applicationState == .active,
+          let frame = arSession.currentFrame,
+          case .normal = frame.camera.trackingState else { promise.resolve(nil); return }
+    let camera = frame.camera
+    let orientation = window?.windowScene?.interfaceOrientation ?? .portrait
+    let resolution = camera.imageResolution
+    let size = bounds.size.width > 0 ? bounds.size : CGSize(width: resolution.width, height: resolution.height)
+    let cameraToWorld = array(camera.viewMatrix(for: orientation).inverse)
+    let projection = array(camera.projectionMatrix(for: orientation, viewportSize: size,
+                                                   zNear: 0.01, zFar: 100))
+    let currentFrameId = frameId
+    let epoch = generation
+    // EVERY VALUE READ OUT BEFORE THE CLOSURES, as `encodeKeyframe` below also does.
+    // Referring to `frame` inside them retains the ARFrame across two thread hops, and
+    // ARKit stops delivering frames while one is held — the session stalls rather than
+    // erroring, which presents as the camera freezing or the app dying.
+    let timestamp = frame.timestamp * 1000
+    let intrinsics = array(camera.intrinsics)
+    let image = CIImage(cvPixelBuffer: frame.capturedImage)
+
+    keyframeQueue.async { [weak self] in
+      guard let self else { promise.resolve(nil); return }
+      let data = self.keyframeContext.pngRepresentation(
+        of: image, format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { promise.resolve(nil); return }
+        // A recalibration during the encode invalidates the pose this carries.
+        guard self.generation == epoch, let data else { promise.resolve(nil); return }
+        promise.resolve([
+          "pngBase64": data.base64EncodedString(),
+          "width": Int(resolution.width),
+          "height": Int(resolution.height),
+          "frameId": currentFrameId,
+          "generation": epoch,
+          "timestamp": timestamp,
+          "cameraToWorld": cameraToWorld,
+          "projection": projection,
+          "intrinsics": intrinsics,
+        ])
+      }
+    }
+  }
+
   private func encodeKeyframe(_ frame: ARFrame, orientation: UIInterfaceOrientation,
                               epoch: Int, index: Int) {
     let camera = frame.camera
@@ -691,6 +762,34 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
     onStatus(["code": "scan_complete", "message": message, "scanDegrees": scanDegrees,
       "wallCount": scanWalls, "floorCount": scanFloors])
     capture?.stop(pauseARSession: false)
+    watchProcessing(epoch: generation)
+  }
+
+  /**
+   Keeps "Building the room…" honest.
+
+   `RoomBuilder` legitimately takes tens of seconds on a large scan, but nothing here
+   bounded it and nothing reported progress — so a session that never produced a result
+   sat on that one string indefinitely with no way out and nothing to diagnose from.
+   Heartbeats say it is still working; the deadline turns a hang into a failure the user
+   can act on. Every timer checks the generation, so a superseded scan's timer is inert.
+   */
+  private func watchProcessing(epoch: Int) {
+    let started = Date()
+    for delay in [20.0, 45.0] {
+      DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+        guard let self, self.mode == "processing", self.generation == epoch else { return }
+        self.onStatus(["code": "scan_complete",
+          "message": "Still building the room — \(Int(Date().timeIntervalSince(started)))s. Large rooms take longer.",
+          "scanDegrees": self.scanDegrees, "wallCount": self.scanWalls, "floorCount": self.scanFloors])
+      }
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 120.0) { [weak self] in
+      guard let self, self.mode == "processing", self.generation == epoch else { return }
+      self.mode = "failed"
+      self.onStatus(["code": "failed",
+        "message": "Building the room did not finish within two minutes. Scan again, moving more slowly and keeping walls in view."])
+    }
   }
 
   private func thermalStateName(_ state: ProcessInfo.ThermalState) -> String {
