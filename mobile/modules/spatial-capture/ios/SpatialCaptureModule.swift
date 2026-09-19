@@ -6,9 +6,29 @@ import Vision
 import UIKit
 
 public class SpatialCaptureModule: Module {
+  // Ownership outlives the native view, so late releases after exit/recalibration
+  // cannot accidentally target the replacement view's pool.
+  fileprivate let frameTextures = SpatialFrameTextures()
+  fileprivate weak var activeView: SpatialCaptureView?
   public func definition() -> ModuleDefinition {
     Name("SpatialCapture")
     Function("isSupported") { RoomCaptureSession.isSupported }
+    AsyncFunction("acquireTextureFrame") {
+      (contextId: Int, frameId: String, width: Double, height: Double, promise: Promise) in
+      guard let view = self.activeView else { promise.resolve(nil); return }
+      view.acquireTextureFrame(contextId: contextId, expectedFrameId: frameId,
+                               width: width, height: height, promise: promise)
+    }.runOnQueue(.main)
+    AsyncFunction("releaseTextureFrame") { (leaseId: String) in
+      self.frameTextures.release(lease: leaseId)
+    }.runOnQueue(.main)
+    AsyncFunction("invalidateTextureFrames") {
+      self.activeView?.invalidateTextureFrames()
+    }.runOnQueue(.main)
+    OnDestroy {
+      let textures = self.frameTextures
+      DispatchQueue.main.async { textures.dispose() }
+    }
     View(SpatialCaptureView.self) {
       Events("onRoom", "onFrame", "onStatus", "onKeyframe")
       Prop("mode") { (view: SpatialCaptureView, mode: String) in view.setMode(mode) }
@@ -22,6 +42,11 @@ public class SpatialCaptureModule: Module {
 // SceneKit is used only for the native camera background. Editable content is
 // rendered by R3F. One ARSession survives measurement -> editing.
 final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewDelegate {
+  private weak var textureModule: SpatialCaptureModule?
+  private var textureGeneration = 0
+  private var textureSequence = 0
+  private var compositingInputsRequested = false
+  private var backgroundObserver: NSObjectProtocol?
   let onRoom = EventDispatcher()
   let onFrame = EventDispatcher()
   let onStatus = EventDispatcher()
@@ -120,6 +145,11 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
     cameraView.delegate = self
     cameraView.scene = SCNScene()
     addSubview(cameraView)
+    textureModule = appContext?.moduleRegistry.get(moduleWithName: "SpatialCapture") as? SpatialCaptureModule
+    textureModule?.activeView = self
+    backgroundObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.willResignActiveNotification, object: nil, queue: .main
+    ) { [weak self] _ in self?.invalidateTextureFrames() }
     memoryObserver = NotificationCenter.default.addObserver(
       forName: UIApplication.didReceiveMemoryWarningNotification,
       object: nil,
@@ -131,6 +161,7 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
   }
   deinit {
     if let memoryObserver { NotificationCenter.default.removeObserver(memoryObserver) }
+    if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
   }
   override func layoutSubviews() {
     super.layoutSubviews()
@@ -143,6 +174,8 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
     if window == nil { stop() }
   }
   private func stop() {
+    invalidateTextureFrames()
+    compositingInputsRequested = false
     generation += 1
     capture?.stop(pauseARSession: true)
     capture?.delegate = nil
@@ -157,6 +190,7 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
   /// `origin` is the room origin in world coordinates, as the conversion computed it.
   /// Passing nil removes the anchor, which returns the room to a fixed world pose.
   func setRoomAnchor(_ origin: [Double]?) {
+    invalidateTextureFrames()
     if let existing = roomAnchor {
       arSession.remove(anchor: existing)
       roomAnchor = nil
@@ -186,6 +220,8 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
       return
     }
     if next == "scan" {
+      invalidateTextureFrames()
+      compositingInputsRequested = false
       generation += 1
       frameId = UUID().uuidString
       frameSequence = 0
@@ -399,6 +435,63 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
         }
       }
     }
+  }
+  // M8-A feasibility path, opt-in from the development panel. It samples the
+  // existing ARSession directly; the 20 Hz metadata/hand pump is not its clock.
+  func acquireTextureFrame(contextId: Int, expectedFrameId: String,
+                           width: Double, height: Double, promise: Promise) {
+    guard mode == "edit", UIApplication.shared.applicationState == .active,
+          expectedFrameId == frameId, contextId > 0,
+          width.isFinite, height.isFinite, width > 0, height > 0,
+          width <= 8192, height <= 8192,
+          let frame = arSession.currentFrame,
+          ProcessInfo.processInfo.systemUptime - frame.timestamp < 0.15,
+          case .normal = frame.camera.trackingState else { promise.resolve(nil); return }
+    if !compositingInputsRequested {
+      compositingInputsRequested = true
+      enableCompositingInputs()
+    }
+    textureSequence += 1
+    let size = CGSize(width: width, height: height)
+    let orientation = window?.windowScene?.interfaceOrientation ?? .portrait
+    let inverseDisplay = frame.displayTransform(for: orientation, viewportSize: size).inverted()
+    var metadata: [String: Any] = [
+      "version": 1, "frameId": frameId, "generation": textureGeneration,
+      "sequence": textureSequence, "timestamp": frame.timestamp * 1000,
+      "viewportWidth": width, "viewportHeight": height,
+      "cameraToWorld": array(frame.camera.viewMatrix(for: orientation).inverse),
+      "projection": array(frame.camera.projectionMatrix(for: orientation, viewportSize: size,
+                                                         zNear: 0.01, zFar: 100)),
+      // Column-major; normalized top-left display UV -> raw sensor UV.
+      "displayToImage": [inverseDisplay.a, inverseDisplay.b, 0,
+                         inverseDisplay.c, inverseDisplay.d, 0,
+                         inverseDisplay.tx, inverseDisplay.ty, 1],
+    ]
+    guard let anchor = roomAnchorTransform(frame) else { promise.resolve(nil); return }
+    metadata["roomAnchor"] = anchor
+    guard let textures = textureModule?.frameTextures else { promise.resolve(nil); return }
+    textures.acquire(frame: frame, contextId: NSNumber(value: contextId), metadata: metadata) {
+      result in promise.resolve(result)
+    }
+  }
+  func invalidateTextureFrames() {
+    textureGeneration += 1
+    textureModule?.frameTextures.invalidate()
+  }
+  private func enableCompositingInputs() {
+    guard let configuration = arSession.configuration?.copy() as? ARWorldTrackingConfiguration else {
+      onStatus(["code": "compositing_unavailable", "message": "Tracked configuration unavailable."])
+      return
+    }
+    let requested: ARConfiguration.FrameSemantics = [.sceneDepth, .personSegmentationWithDepth]
+    guard ARWorldTrackingConfiguration.supportsFrameSemantics(requested) else {
+      onStatus(["code": "compositing_unavailable", "message": "Paired depth and person segmentation unavailable."])
+      return
+    }
+    configuration.frameSemantics.formUnion(requested)
+    // No resetTracking/removeExistingAnchors: calibration frame and room anchor survive.
+    arSession.run(configuration, options: [])
+    onStatus(["code": "compositing_inputs", "message": "Depth/foreground inputs enabled; live erasure awaits the M8 device gate."])
   }
   private func surface(_ surface: CapturedRoom.Surface, kind: String) -> [String: Any] {
     var corners = surface.polygonCorners

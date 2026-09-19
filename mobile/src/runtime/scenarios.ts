@@ -22,6 +22,7 @@ import { roomToSession } from '../adapters/room-conversion';
 import { applyToPoint, roomFromWorld } from '../adapters/room-space';
 import type { EditorState, EditResult, InteractionContext, Vec3 } from '@reality/contracts';
 import { createEditor, type Editor } from './editor';
+import { compositingScenarios } from './compositing-scenarios';
 import { InputCoordinator, DESTINATION_MAX_AGE_MS } from './coordinator';
 import { buildOccupancy, buildScp, isAmbiguous, largestOpenRect } from '@reality/spatial-engine';
 import { ScpSchema } from '@reality/contracts';
@@ -35,7 +36,7 @@ export type Scenario = {
   /** Which milestone gate this scenario is evidence for. The two suites share every
    * helper below but prove different things, and M3 drives the carry state machine
    * directly rather than going through `editor.intent`. */
-  milestone: 'M2' | 'M3' | 'M4' | 'M6' | 'M7';
+  milestone: 'M2' | 'M3' | 'M4' | 'M6' | 'M7' | 'M8';
   gate:
     | 'placement'
     | 'overlap'
@@ -58,6 +59,7 @@ export type Scenario = {
     | 'recovery'
     | 'anchor'
     | 'shell'
+    | 'compositor'
     | 'binding'
     | 'ordering'
     | 'parity'
@@ -1719,6 +1721,8 @@ export const scenarios: Scenario[] = [
     },
   },
 ];
+
+scenarios.push(...compositingScenarios);
 
 /** The UI and the headless runner both filter one list, so a scenario cannot be added to
  * the suite and forgotten by the button that runs it. */

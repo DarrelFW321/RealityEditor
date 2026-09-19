@@ -12,6 +12,8 @@ At completion, another person can install the candidate, calibrate an empty or f
 
 Dependencies: M6, M7, and M8 completion checklists plus the accepted M5 reconstruction baseline. M9 rechecks the integrated candidate without reopening the original milestone scope.
 
+[M8.5 world-model evaluation](m8-5-world-model-evaluation.md) is optional. If evaluated, record its adopt/defer/reject outcome before freezing the candidate. Deferral, rejection, or skipping evaluation keeps the accepted baseline and does not block M9. An adopted appearance adapter must pass this milestone's complete integrated acceptance, including fallback and provider-data lifecycle checks.
+
 This milestone does not include public launch, App Store submission, accounts, persistent projects, multiroom, non-LiDAR support, or a horizontally scaled backend.
 
 ## Starting state and implementation boundaries
@@ -31,6 +33,7 @@ Keep the staging service bounded to one Fastify process with the existing epheme
 3. Package an internal distribution build with a separate staging identity and backend configuration.
 4. Document reproducible installation and configuration from a clean checkout or the distributed build artifact.
 5. Retain the previous accepted installable binary and compatible server/worker configuration. Record their artifact locations and restore procedure.
+6. Record whether M8.5 was adopted, deferred, rejected, or skipped. If adopted, pin its appearance provider/model/configuration, include its optional refinement contract in the compatible release set, and retain a verified baseline-only configuration.
 
 Deliverable: an identifiable candidate and rollback set, with an explicit support matrix.
 
@@ -84,7 +87,7 @@ Deliverable: an internal release handoff another engineer or evaluator can follo
 
 ## Public interfaces and compatibility
 
-No new product-facing API is planned for M9. Freeze the interfaces delivered by M6–M8 and verify the candidate's client/server/worker combination.
+No new product-facing API is planned for M9. Freeze the interfaces delivered by M6–M8 and any adopted M8.5 refinement interface, and verify the candidate's client/server/worker combination.
 
 - Record compatible versions as a release set rather than assuming arbitrary client and worker revisions interoperate.
 - Preserve legacy routes that remain supported; verify that staging credentials and configuration do not leak into another build variant.
@@ -126,6 +129,7 @@ Run the repository's existing TypeScript, milestone gate, and iOS JavaScript bun
 ### Verification and end-state evidence
 
 - [ ] M6, M7, and M8 completion checklists are satisfied.
+- [ ] M8.5 outcome or explicit skip is recorded; any adopted adapter passes its gates and this release's integrated acceptance, with baseline fallback verified.
 - [ ] Existing local checks and milestone scenarios pass for the candidate commit.
 - [ ] Every advertised device/OS combination has physical-device evidence.
 - [ ] Empty-room and furnished-room journeys each pass three consecutive runs per combination.
@@ -143,6 +147,7 @@ Run the repository's existing TypeScript, milestone gate, and iOS JavaScript bun
 
 - Accepted application commit/build and artifact location: **not recorded**.
 - Lockfile hash, backend/worker versions, adapter IDs, model configuration/checksums: **not recorded**.
+- M8.5 outcome/skip, selected appearance adapter, and baseline fallback: **not recorded**.
 - Supported device/OS matrix: **not recorded**.
 - Local commands and scenario results: **not recorded**.
 - Full-journey recordings and recovery evidence: **not recorded**.

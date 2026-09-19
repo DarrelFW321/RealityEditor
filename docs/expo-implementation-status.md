@@ -28,7 +28,8 @@ Planning update, 2026-09-19: the project owner confirmed **M5 complete**. The re
 | M5 Reconstruction | Complete per project-owner confirmation, 2026-09-19 | Accepted baseline for M6–M9; historical evidence below is retained |
 | [M6 Hands/voice](milestones/m6-hands-and-voice.md) | Implemented; 34/34 app gate including 9 M6 scenarios | Device acceptance: audio, fingertip alignment, delayed tools, combined input, background/resume |
 | [M7 Creation/restyle](milestones/m7-creation-and-restyling.md) | Procedural additions and basic edits implemented; detailed plan available | Whole-layout search, stable groups, construction validation, and atomic scene/visibility transactions |
-| [M8 Compositing](milestones/m8-live-compositing.md) | Not implemented; detailed plan available | Native texture bridge, selective pixel replacement, foreground/depth handling, and sustained 30 FPS |
+| [M8 Compositing](milestones/m8-live-compositing.md) | In progress: native texture feasibility spike and eight local scenarios implemented; [device handoff](m8-native-texture-feasibility.md) | Native compilation/device feasibility first, then selective erasure, transaction integration, foreground/depth acceptance, and sustained 30 FPS; not complete |
+| [M8.5 World-model evaluation](milestones/m8-5-world-model-evaluation.md) | Optional; desk research and plan documented, no provider experiments performed | After accepted M8: bounded appearance comparison, native/geometry/privacy gates, and adopt/defer/reject decision; baseline M9 remains available |
 | [M9 Internal release](milestones/m9-internal-release-candidate.md) | Not ready; detailed plan available | Integrated acceptance, supported-device evidence, staging operation, performance, and rollback |
 
 ## M2 spatial engine

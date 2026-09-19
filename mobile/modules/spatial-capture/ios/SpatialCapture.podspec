@@ -10,7 +10,8 @@ Pod::Spec.new do |s|
   s.source = { :git => '' }
   s.static_framework = true
   s.dependency 'ExpoModulesCore'
-  s.frameworks = 'ARKit', 'RoomPlan', 'SceneKit', 'Vision'
+  s.dependency 'ExpoGL', '57.0.2'
+  s.frameworks = 'ARKit', 'RoomPlan', 'SceneKit', 'Vision', 'OpenGLES', 'CoreVideo'
   s.source_files = '**/*.{h,m,mm,swift}'
   s.swift_version = '5.9'
 end
