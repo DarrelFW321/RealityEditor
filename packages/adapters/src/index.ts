@@ -90,10 +90,15 @@ export class AdapterSlot<T extends Adapter> {
   async dispose() {
     this.requestVersion++;
     this.generation++;
-    await this.starting?.stop();
-    await this.queue;
+    // Await the queue BEFORE touching anything. Stopping `starting` first used to race
+    // the in-flight `replace`: that transition sees the bumped generation, disposes the
+    // adapter itself, and then this method disposed the same instance a second time on a
+    // fast background/foreground/unmount. Letting the transition finish means there is
+    // exactly one owner to clean up, and the bumped counters guarantee it parked itself.
+    await this.queue.catch(() => {});
     const previous = this.current;
     this.current = null;
+    this.starting = null;
     if (previous) {
       try {
         await previous.stop();

@@ -11,7 +11,8 @@
     "dev": "npm run start --workspace @reality/mobile",
     "server": "npm run dev --workspace reality-editor-server",
     "typecheck": "tsc --noEmit && npm run typecheck --workspace @reality/mobile && npm run typecheck --workspace reality-editor-server",
-    "codegen": "bash contracts/codegen.sh"
+    "codegen": "bash contracts/codegen.sh",
+    "gate": "tsx mobile/src/runtime/gate.ts"
   },
   "devDependencies": {
     "typescript": "~5.9.3",

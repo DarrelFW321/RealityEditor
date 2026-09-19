@@ -15,13 +15,15 @@ import {
   type Vec3,
 } from '@reality/contracts';
 import {
+  bearingFor,
+  bearingIsDerived,
   buildIndex,
   describeViolation,
   evaluatePlacement,
   type ObjectLike,
   type PlacementAspect,
 } from './geometry';
-import { emptyReport, solvePlacement } from './solver';
+import { dominant, emptyReport, narrator, solvePlacement } from './solver';
 import { narratableAdjustmentM } from './clearances';
 import { applyStructuralChange } from './structure';
 
@@ -43,6 +45,10 @@ export type EngineSnapshot = {
   result: EditResult | null;
   /** Set when an adjustment is large enough to need confirming before it commits. */
   pending: { operationId: string; report: ConstraintReport } | null;
+  /** What a release from the current held pose would do. Advisory only: carrying is never
+   * obstructed by it, and it deliberately ignores support, which is not chosen until
+   * release. Null whenever nothing is held. */
+  previewValidity: { ok: boolean; reason: string | null } | null;
 };
 
 /** Which checks an edit actually needs. A colour change needs none of them. */
@@ -51,9 +57,12 @@ const ASPECTS: Record<string, readonly PlacementAspect[]> = {
   material: [],
   remove: [],
   rotate: ['bounds', 'intersection', 'doors', 'support', 'mount', 'construction'],
-  resize: ['bounds', 'intersection', 'doors', 'support', 'mount', 'construction'],
-  add: ['bounds', 'intersection', 'doors', 'support', 'mount', 'construction'],
-  replace: ['bounds', 'intersection', 'doors', 'support', 'mount', 'construction'],
+  // Rotation is the only one of these that cannot change an object's proportions, so it
+  // is the only one that skips the stability check. Resize, add and replace can all
+  // introduce something taller than its base is wide.
+  resize: ['bounds', 'intersection', 'doors', 'support', 'mount', 'construction', 'stability'],
+  add: ['bounds', 'intersection', 'doors', 'support', 'mount', 'construction', 'stability'],
+  replace: ['bounds', 'intersection', 'doors', 'support', 'mount', 'construction', 'stability'],
 };
 
 const WALL_TEMPLATES = new Set(['frame', 'shelf']);
@@ -85,6 +94,11 @@ export class SpatialEngine {
     candidate: EditorState;
     original: EditorState;
     report: ConstraintReport;
+    /** Carried forward from the release that parked this. A scanned object has no
+     * assembly, so re-deriving the support from `assemblies` on confirm yielded '' and
+     * refused every confirmed adjustment of real furniture with "that support is no
+     * longer there". The support was already resolved once; keep the answer. */
+    supportSurface: string;
   } | null = null;
   private transaction: {
     original: EditorState;
@@ -107,6 +121,7 @@ export class SpatialEngine {
       preview: null,
       result: null,
       pending: null,
+      previewValidity: null,
     };
   }
 
@@ -144,8 +159,12 @@ export class SpatialEngine {
     } = {},
   ): EditResult {
     const report = extra.report ?? null;
+    // Named, not raw ids: EditorPanel renders these straight onto the screen, and the
+    // arrow is required because `.map` would otherwise pass the array index as `name`.
+    const named = narrator(this.snapshot.scene).name;
     const conflicts =
-      extra.conflicts ?? (report ? report.violations_resolved.map(describeViolation) : []);
+      extra.conflicts ??
+      (report ? report.violations_resolved.map((v) => describeViolation(v, named)) : []);
     const result: EditResult = {
       status,
       message,
@@ -164,6 +183,22 @@ export class SpatialEngine {
     });
     this.publish({ result });
     return result;
+  }
+
+  /** The carry lifecycle, recorded. The PRD requires held/drop/settling transitions,
+   * rejected support surfaces, settling duration and the reason a pose was restored to
+   * be observable; before this a whole carry emitted two events and neither was a
+   * transition. Distinguishing allowed carry-time overlap from an invalid committed
+   * overlap is why `carry/held` is logged separately from `engine/rejected`. */
+  private trace(code: string, extra: { targetId?: string; durationMs?: number } = {}) {
+    this.diagnostics.emit({
+      timestamp: Date.now(),
+      stage: 'carry',
+      code,
+      sessionId: this.snapshot.scene.sessionId,
+      revision: this.snapshot.scene.revision,
+      ...extra,
+    });
   }
 
   private commit(scene: EditorState, original: EditorState, operation: EngineOp) {
@@ -193,6 +228,7 @@ export class SpatialEngine {
       preview: null,
       previewScene: null,
       pending: null,
+      previewValidity: null,
     });
   }
 
@@ -317,7 +353,13 @@ export class SpatialEngine {
         this.transaction.controller.abort();
         this.transaction.controller = new AbortController();
       }
-      this.publish({ phase: 'held' });
+      this.publish({
+        phase: 'held',
+        previewValidity: this.snapshot.preview
+          ? this.validityAt(this.transaction, this.snapshot.preview.pose)
+          : null,
+      });
+      this.trace('regrabbed', { targetId });
       return this.result('preview', 'Carrying resumed.');
     }
     this.cancel();
@@ -332,7 +374,9 @@ export class SpatialEngine {
       phase: 'held',
       previewScene: this.transaction.draft,
       preview: { targetId, pose: copy(object.pose) as PoseV1 },
+      previewValidity: this.validityAt(this.transaction, object.pose as PoseV1),
     });
+    this.trace('held', { targetId });
     return this.result('preview', 'Carrying freely. Release to place.');
   }
 
@@ -343,20 +387,64 @@ export class SpatialEngine {
       ![...pose.position, pose.yaw].every(Number.isFinite)
     )
       return;
-    this.publish({ preview: { targetId: this.transaction.targetId, pose: copy(pose) } });
+    this.publish({
+      preview: { targetId: this.transaction.targetId, pose: copy(pose) },
+      previewValidity: this.validityAt(this.transaction, pose),
+    });
+  }
+
+  /** Answers "would a release here be accepted?" without affecting the carry at all.
+   * The PRD requires drop validity to be shown while held and equally requires it never
+   * to obstruct movement, so this only ever writes to the snapshot.
+   *
+   * `support` and `mount` are deliberately excluded: no support is chosen until release,
+   * so asking about one here would report every mid-air pose as floating and turn an
+   * advisory query into a permanent red light. `allowAboveSupport` exists for exactly
+   * this reason. Measured at 0.008 ms against a 16.7 ms frame, so the index is rebuilt
+   * each time rather than cached and invalidated on mid-carry resize. */
+  private validityAt(
+    tx: NonNullable<SpatialEngine['transaction']>,
+    pose: PoseV1,
+  ): { ok: boolean; reason: string | null } {
+    const object = tx.draft.design.objects.find((o) => o.id === tx.targetId);
+    if (!object) return { ok: false, reason: 'That object is no longer in the room.' };
+    const finding = evaluatePlacement(
+      tx.draft,
+      { ...object, pose: { position: pose.position, yaw: pose.yaw } } as ObjectLike,
+      {
+        aspects: ['bounds', 'intersection', 'doors'],
+        stopAtFirst: true,
+        skipNotes: true,
+        allowAboveSupport: true,
+      },
+    );
+    const worst = dominant(finding.violations);
+    if (!worst) return { ok: true, reason: null };
+    // Present tense and named: this is what a drop would hit right now, shown live.
+    return { ok: false, reason: describeViolation(worst, narrator(tx.draft).name) };
   }
 
   cancel() {
+    if (this.transaction) this.trace('cancelled', { targetId: this.transaction.targetId });
     this.transaction?.controller.abort();
     this.transaction = null;
     this.pending = null;
-    this.publish({ phase: 'committed', preview: null, previewScene: null, pending: null });
+    this.publish({
+      phase: 'committed',
+      preview: null,
+      previewScene: null,
+      pending: null,
+      previewValidity: null,
+    });
   }
 
   setTracking(reliable: boolean) {
     if (this.tracking === reliable) return;
     this.tracking = reliable;
     if (!reliable) {
+      // Recorded before cancel() so the log says why the pose was restored, not just that
+      // it was. Tracking loss and a user cancel are the same rollback but not the same event.
+      if (this.transaction) this.trace('restored_tracking_lost', { targetId: this.transaction.targetId });
       this.cancel();
       this.result('rejected', 'Tracking lost. Last committed scene preserved.', {
         refusal: 'tracking_lost',
@@ -387,7 +475,10 @@ export class SpatialEngine {
       (o) => o.id === supportId && o.state === 'present',
     );
     if (!supporter) return { refusal: 'unknown_target', message: 'That support is not in the room.' };
-    if (!scene.assemblies[supporter.id]?.support?.bearing)
+    // A scanned object has no assembly, so its bearing is derived from the measured box.
+    // Without this a real desk can never hold anything, which made object support
+    // unreachable for every piece of furniture an actual RoomPlan scan produces.
+    if (!bearingFor(scene, supporter as ObjectLike))
       return {
         refusal: 'incompatible_support',
         message: `The ${supporter.refined_class ?? supporter.class} has no surface that can hold something.`,
@@ -424,6 +515,7 @@ export class SpatialEngine {
 
     const support = this.resolveSupport(candidate, object, supportSurface);
     if ('refusal' in support) {
+      this.trace('support_rejected', { targetId: supportSurface });
       this.cancel();
       return this.result('rejected', support.message, { refusal: support.refusal });
     }
@@ -440,7 +532,8 @@ export class SpatialEngine {
       }
     }
 
-    this.publish({ phase: 'resolving' });
+    this.trace('resolving', { targetId: object.id });
+    this.publish({ phase: 'resolving', previewValidity: null });
     const report = solvePlacement(
       candidate,
       object.id,
@@ -453,6 +546,7 @@ export class SpatialEngine {
       },
     );
     if (report.status === 'rejected') {
+      this.trace('restored_unsolvable', { targetId: object.id });
       this.cancel();
       return this.result('rejected', 'Drop rejected; original placement restored.', { report });
     }
@@ -461,7 +555,13 @@ export class SpatialEngine {
 
     // A lateral adjustment the user can see must be confirmed, not slipped in.
     if (report.status === 'adjusted' && report.adjustment_distance_m >= narratableAdjustmentM) {
-      this.pending = { operationId, candidate, original: tx.original, report };
+      this.pending = {
+        operationId,
+        candidate,
+        original: tx.original,
+        report,
+        supportSurface: support.surfaceId,
+      };
       this.publish({
         phase: 'resolving',
         pending: { operationId, report },
@@ -484,9 +584,7 @@ export class SpatialEngine {
       return this.result('rejected', 'There is nothing waiting to confirm.', {
         refusal: 'no_transaction',
       });
-    const object = pending.candidate.design.objects.find((o) => o.id === tx.targetId);
-    const surfaceId = object ? (pending.candidate.assemblies[object.id]?.support.surfaceId ?? '') : '';
-    return this.finish(operationId, pending.candidate, tx, pending.report, surfaceId);
+    return this.finish(operationId, pending.candidate, tx, pending.report, pending.supportSurface);
   }
 
   private async finish(
@@ -497,9 +595,11 @@ export class SpatialEngine {
     supportSurface: string,
   ): Promise<EditResult> {
     const object = candidate.design.objects.find((o) => o.id === tx.targetId)!;
+    this.trace('settling', { targetId: object.id });
     this.publish({ phase: 'settling', pending: null });
     const controller = tx.controller;
     const cancelled = () => controller.signal.aborted || this.transaction !== tx;
+    const startedAt = Date.now();
     try {
       const settled = await this.settling.settle(
         { scene: candidate, targetId: object.id, pose: object.pose as PoseV1, supportSurface },
@@ -508,8 +608,14 @@ export class SpatialEngine {
           if (!cancelled()) this.publish({ preview: { targetId: object.id, pose: p } });
         },
       );
-      if (cancelled())
+      if (cancelled()) {
+        this.trace('restored_cancelled', {
+          targetId: object.id,
+          durationMs: Date.now() - startedAt,
+        });
         return this.result('rejected', 'That move was cancelled.', { refusal: 'no_transaction' });
+      }
+      this.trace('settled', { targetId: object.id, durationMs: Date.now() - startedAt });
       object.pose = settled;
 
       // The support could have moved or gone during the settle window.
@@ -517,16 +623,26 @@ export class SpatialEngine {
         candidate.design.surfaces.some((s) => s.id === supportSurface && s.state === 'present') ||
         candidate.design.objects.some((o) => o.id === supportSurface && o.state === 'present');
       if (!stillThere) {
+        this.trace('restored_support_gone', { targetId: supportSurface });
         this.cancel();
         return this.result('rejected', 'That support is no longer there.', {
           refusal: 'incompatible_support',
         });
       }
 
+      const onObject = candidate.assemblies[object.id]?.support.mode === 'object';
       const finding = evaluatePlacement(candidate, object, {
-        supportId: candidate.assemblies[object.id]?.support.mode === 'object' ? supportSurface : undefined,
+        supportId: onObject ? supportSurface : undefined,
       });
+      // A derived bearing is geometry read off a scan, not a load rating. Say so rather
+      // than let a successful placement imply the real shelf was measured to hold this.
+      const supporter = candidate.design.objects.find((o) => o.id === supportSurface);
+      if (onObject && supporter && bearingIsDerived(candidate, supporter as ObjectLike))
+        finding.caveats.push(
+          `The top of the ${supporter.refined_class ?? supporter.class} was derived from its scanned outline; its real load capacity is not verified.`,
+        );
       if (finding.violations.length) {
+        this.trace('restored_invalid_settle', { targetId: object.id });
         this.cancel();
         return this.result('rejected', 'Settling did not produce a valid placement.', {
           report: { ...report, status: 'rejected', violations_resolved: finding.violations },
@@ -546,6 +662,7 @@ export class SpatialEngine {
       const operation = this.makeOp(command, operationId, this.inverseOf(tx.original, command));
       this.transaction = null;
       this.commit(candidate, tx.original, { ...operation, report });
+      this.trace('committed', { targetId: object.id, durationMs: Date.now() - startedAt });
       return this.result(
         report.status === 'adjusted' ? 'adjusted' : 'applied',
         report.status === 'adjusted'
@@ -554,8 +671,12 @@ export class SpatialEngine {
         { report: { ...report, remaining_notes: finding.notes }, caveats: finding.caveats },
       );
     } catch (error) {
-      if (cancelled())
+      const durationMs = Date.now() - startedAt;
+      if (cancelled()) {
+        this.trace('restored_cancelled', { targetId: object.id, durationMs });
         return this.result('rejected', 'That move was cancelled.', { refusal: 'no_transaction' });
+      }
+      this.trace('restored_settle_failed', { targetId: object.id, durationMs });
       this.cancel();
       return this.result('rejected', 'Settling failed; original placement restored.', {
         conflicts: [error instanceof Error ? error.message : 'Unknown settling failure'],
@@ -660,7 +781,12 @@ export class SpatialEngine {
       });
     tx.draft = draft;
     tx.pendingIds.add(operationId);
-    this.publish({ previewScene: draft });
+    this.publish({
+      previewScene: draft,
+      previewValidity: this.snapshot.preview
+        ? this.validityAt(tx, this.snapshot.preview.pose)
+        : null,
+    });
     return this.result('preview', 'Updated the carried object. Release to commit.', { caveats });
   }
 

@@ -142,7 +142,15 @@ export function SceneView({
                   <boxGeometry args={part.size} />
                   <meshStandardMaterial
                     color={part.color}
-                    emissive={selectedId === object.id ? '#214d77' : '#000000'}
+                    emissive={
+                      // A carried object glows amber where it could not be released, so
+                      // drop validity is readable without looking away from the object.
+                      preview && snapshot.previewValidity?.ok === false
+                        ? '#7a3a12'
+                        : selectedId === object.id
+                          ? '#214d77'
+                          : '#000000'
+                    }
                     transparent={!!preview}
                     opacity={preview ? 0.65 : 1}
                   />

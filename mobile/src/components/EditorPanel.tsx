@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { AdapterSlot } from '@reality/adapters';
+import { bearingFor } from '@reality/spatial-engine';
 import type { EditorState, InteractionContext, Vec3 } from '@reality/contracts';
 import type { Editor, Intent } from '../runtime/editor';
 import type { TrackedFrame } from '../adapters/roomplan';
@@ -17,7 +18,13 @@ import { RealtimeVoice } from '../adapters/realtime';
 import { evaluateSpatialFrame } from '../adapters/roomplan';
 import { SceneView } from './SceneView';
 import { resolveHand } from '../adapters/hand';
-import { checkDeterminism, runScenario, scenarios, type ScenarioResult } from '../runtime/scenarios';
+import {
+  checkDeterminism,
+  runScenario,
+  scenariosFor,
+  type Scenario,
+  type ScenarioResult,
+} from '../runtime/scenarios';
 
 export function EditorPanel({
   editor,
@@ -47,7 +54,8 @@ export function EditorPanel({
   const [, refreshDiagnostics] = useState(0);
   const [sceneSize, setSceneSize] = useState<{ width: number; height: number } | null>(null);
   const [gate, setGate] = useState<ScenarioResult[]>([]);
-  const [gateRunning, setGateRunning] = useState(false);
+  const [gateRunning, setGateRunning] = useState<Scenario['milestone'] | null>(null);
+  const [gateMilestone, setGateMilestone] = useState<Scenario['milestone'] | null>(null);
   const renderFps = useRef(0);
   const slot = useRef(new AdapterSlot<RealtimeVoice>(editor.diagnostics));
   // One clock everywhere: epoch milliseconds. Attention binds against this.
@@ -80,7 +88,13 @@ export function EditorPanel({
         editor.engine.setTracking(false);
         void slot.current.dispose();
         setVoice(false);
-      } else if (!frame) editor.engine.setTracking(true);
+      } else {
+        // Resume from what the AR session actually reports, not from the absence of a
+        // frame ref. `!frame` is false for every real session, so editing stayed dead
+        // after any backgrounding until the panel remounted. With no tracked frame at
+        // all (the development room) there is nothing to lose tracking, so resume.
+        editor.engine.setTracking(!frame || frame.current?.tracking === 'normal');
+      }
     });
     return () => {
       subscription.remove();
@@ -141,6 +155,28 @@ export function EditorPanel({
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [editor, handFrame, floorOffset]);
+  /** One runner for both gates. The M2 and M3 suites differ only in which scenarios
+   * they select, so duplicating the button would let one drift behind the other. */
+  async function runGate(milestone: Scenario['milestone']) {
+    setGateRunning(milestone);
+    setGateMilestone(milestone);
+    try {
+      const results: ScenarioResult[] = [];
+      for (const scenario of scenariosFor(milestone)) results.push(await runScenario(scenario));
+      // Repeating a solver-heavy scenario is the only check that a result was reasoned
+      // rather than sampled.
+      const repeatable = scenariosFor(milestone).find(
+        (s) => s.id === (milestone === 'M2' ? 'overlap' : 'carry-adjust'),
+      );
+      if (repeatable) {
+        const repeat = await checkDeterminism(repeatable);
+        results.push({ id: 'determinism', title: 'Determinism', steps: [repeat], ok: repeat.ok });
+      }
+      setGate(results);
+    } finally {
+      setGateRunning(null);
+    }
+  }
   async function run(intent: Intent | unknown) {
     try {
       const result = await editor.intent(intent, context.current);
@@ -237,6 +273,15 @@ export function EditorPanel({
       <View style={styles.panel}>
         <Text style={styles.text}>{snapshot.result?.message ?? message}</Text>
         <Text style={styles.detail}>{message}</Text>
+        {/* Drop validity while held. The PRD requires this to be visible during the
+            carry and equally requires it not to block one, so it is only ever text. */}
+        {snapshot.phase === 'held' && snapshot.previewValidity && (
+          <Text style={snapshot.previewValidity.ok ? styles.good : styles.error}>
+            {snapshot.previewValidity.ok
+              ? 'Clear to release here.'
+              : snapshot.previewValidity.reason}
+          </Text>
+        )}
         {snapshot.result?.conflicts.map((error, i) => (
           <Text key={`conflict-${i}`} style={styles.error}>
             {error}
@@ -419,31 +464,21 @@ export function EditorPanel({
               Alignment markers: red is the AR origin; green points are measured floor boundaries.
             </Text>
             <Text style={[styles.detail, gate.length && gate.every((g) => g.ok) ? styles.good : styles.error]}>
-              M2 gate: {gate.length ? `${gate.filter((g) => g.ok).length}/${gate.length} scenarios pass` : 'not run'}
+              {gateMilestone ?? 'M2/M3'} gate:{' '}
+              {gate.length
+                ? `${gate.filter((g) => g.ok).length}/${gate.length} scenarios pass`
+                : 'not run'}
             </Text>
-            <Button
-              title={gateRunning ? 'Running…' : 'Run M2 gate'}
-              disabled={gateRunning}
-              onPress={() => {
-                setGateRunning(true);
-                void (async () => {
-                  const results: ScenarioResult[] = [];
-                  for (const scenario of scenarios) results.push(await runScenario(scenario));
-                  const overlap = scenarios.find((s) => s.id === 'overlap');
-                  if (overlap) {
-                    const repeat = await checkDeterminism(overlap);
-                    results.push({
-                      id: 'determinism',
-                      title: 'Determinism',
-                      steps: [repeat],
-                      ok: repeat.ok,
-                    });
-                  }
-                  setGate(results);
-                  setGateRunning(false);
-                })();
-              }}
-            />
+            <View style={styles.row}>
+              {(['M2', 'M3'] as const).map((milestone) => (
+                <Button
+                  key={milestone}
+                  title={gateRunning === milestone ? 'Running…' : `Run ${milestone} gate`}
+                  disabled={gateRunning !== null}
+                  onPress={() => void runGate(milestone)}
+                />
+              ))}
+            </View>
             {gate.map((result) => (
               <View key={result.id}>
                 <Text style={[styles.detail, result.ok ? styles.good : styles.error]}>
@@ -485,14 +520,17 @@ export function EditorPanel({
     </View>
   );
 }
-/** A destination on another object is only offered when that object can carry it. */
+/** A destination on another object is only offered when that object can carry it.
+ * Goes through `bearingFor` so a scanned desk is offered on the same terms as one the
+ * user added; checking `assemblies` directly excluded every measured object. */
 function canSupport(
   scene: EditorState,
   carriedId: string | undefined,
   targetId: string,
 ): boolean {
   if (!carriedId || carriedId === targetId) return false;
-  if (!scene.assemblies[targetId]?.support?.bearing) return false;
+  const target = scene.design.objects.find((o) => o.id === targetId);
+  if (!target || !bearingFor(scene, target)) return false;
   const carried = scene.design.objects.find((o) => o.id === carriedId);
   if (!carried) return false;
   const [w, h, d] = carried.dimensions;
