@@ -74,6 +74,15 @@ export const IntentSchema = z
     width_delta_m: z.number().finite().optional(),
     height_delta_m: z.number().finite().optional(),
     depth_delta_m: z.number().finite().optional(),
+    /**
+     * Absolute size, one axis at a time. Preferred over `dimensions`: a bare 3-tuple
+     * makes the model guess that index 0 is width and index 1 is height, and OpenAI's
+     * function-schema validator rejects the tuple encoding outright (see `toolSchema`).
+     * Any axis left out keeps its current value, so "make it 1.2 wide" is one field.
+     */
+    width_m: z.number().finite().positive().optional(),
+    height_m: z.number().finite().positive().optional(),
+    depth_m: z.number().finite().positive().optional(),
     /** For `paint`: 'object' | 'group' | 'surface' | 'room'. Defaults to 'object'. */
     paint_target: z.enum(['object', 'group', 'surface', 'room']).optional(),
     /** The wall or floor to repaint, or the surface a group should face. */
@@ -136,8 +145,8 @@ export const voiceTool = {
   type: 'function',
   name: 'edit_room',
   description:
-    'Edit using the bound selection and pointed destination. No invented coordinates. Ask for missing targets/destinations. Report the returned result, including any adjustment. When the result asks for confirmation, call again with action "confirm" only after the user agrees. For follow-ups to something you already created, use action "group_edit" with the group id from context so the same objects are edited rather than new ones generated.',
-  parameters: z.toJSONSchema(IntentSchema),
+    'Edit using the bound selection and pointed destination. To resize, use width_m/height_m/depth_m for an absolute size or width_delta_m/height_delta_m/depth_delta_m for a change like "20cm wider"; axes you omit keep their current value, and you never need to know the current size. No invented coordinates. Ask for missing targets/destinations. Report the returned result, including any adjustment. When the result asks for confirmation, call again with action "confirm" only after the user agrees. For follow-ups to something you already created, use action "group_edit" with the group id from context so the same objects are edited rather than new ones generated.',
+  parameters: toolSchema(IntentSchema),
 };
 
 /** M7.6: whole arrangements. The planner computes every pose; this carries none. */
@@ -146,7 +155,7 @@ export const recipeTool = {
   name: 'restyle_room',
   description:
     'Create or restyle a whole arrangement from a description, e.g. "a blue bedroom with three frames on that wall". Supply only families, counts and named surfaces from the context — never coordinates. The device plans the layout, checks it against the real room and reports back. If the result asks for confirmation, repeat the call is wrong: call edit_room with action "confirm" once the user agrees.',
-  parameters: z.toJSONSchema(RecipeIntentSchema),
+  parameters: toolSchema(RecipeIntentSchema),
 };
 
 /**
@@ -159,15 +168,62 @@ export const recipeTool = {
  */
 export function relativeDimensions(
   current: Vec3,
-  deltas: { width_delta_m?: number; height_delta_m?: number; depth_delta_m?: number },
+  request: {
+    dimensions?: readonly number[];
+    width_m?: number;
+    height_m?: number;
+    depth_m?: number;
+    width_delta_m?: number;
+    height_delta_m?: number;
+    depth_delta_m?: number;
+  },
 ): Vec3 | undefined {
-  const { width_delta_m: dw, height_delta_m: dh, depth_delta_m: dd } = deltas;
-  if (dw === undefined && dh === undefined && dd === undefined) return undefined;
-  return [
-    Number((current[0] + (dw ?? 0)).toFixed(4)),
-    Number((current[1] + (dh ?? 0)).toFixed(4)),
-    Number((current[2] + (dd ?? 0)).toFixed(4)),
-  ];
+  // A complete tuple wins when a programmatic caller supplies one; the model is not
+  // asked for it. Then per-axis absolutes, then per-axis deltas. Mixing is allowed and
+  // well defined: an axis with neither keeps the size it has.
+  if (request.dimensions?.length === 3)
+    return [request.dimensions[0]!, request.dimensions[1]!, request.dimensions[2]!];
+  const absolute = [request.width_m, request.height_m, request.depth_m];
+  const deltas = [request.width_delta_m, request.height_delta_m, request.depth_delta_m];
+  if (absolute.every((v) => v === undefined) && deltas.every((v) => v === undefined))
+    return undefined;
+  return [0, 1, 2].map((i) =>
+    Number(((absolute[i] ?? current[i]! + (deltas[i] ?? 0))).toFixed(4)),
+  ) as Vec3;
+}
+
+/**
+ * The JSON Schema a tool is actually shipped with.
+ *
+ * `z.toJSONSchema` emits correct JSON Schema 2020-12, and OpenAI's function-calling
+ * validator does not accept all of it. A tuple becomes `prefixItems` + `items: false`,
+ * which is rejected — so `dimensions` made the whole `edit_room` schema unusable and
+ * the model reported that it could not resize anything while move and colour worked.
+ * A stray top-level `$schema` is dropped for the same reason: unknown keys are a risk
+ * for no benefit, since nothing downstream reads it.
+ *
+ * Applied to every tool rather than patched at the one call site, so a tuple added
+ * later cannot quietly reintroduce this.
+ */
+export function toolSchema(schema: z.ZodType): Record<string, unknown> {
+  const clean = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(clean);
+    if (!node || typeof node !== 'object') return node;
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (key === '$schema') continue;
+      out[key] = clean(value);
+    }
+    if (Array.isArray(out.prefixItems)) {
+      // A homogeneous array with the same bounds. `minItems`/`maxItems` already carry
+      // the arity, so nothing about the contract is lost.
+      out.items = (out.prefixItems as unknown[])[0] ?? { type: 'number' };
+      delete out.prefixItems;
+    }
+    if (out.items === false) delete out.items;
+    return out;
+  };
+  return clean(z.toJSONSchema(schema)) as Record<string, unknown>;
 }
 
 export interface EditorModules {
@@ -450,9 +506,7 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
         groupOf(state, command.target_id ?? context.selectedId ?? '');
       if (!group)
         return rejected('I do not know which group you mean. Point at one of them.', 'unknown_target');
-      const dimensions = command.dimensions
-        ? (command.dimensions as Vec3)
-        : relativeDimensions(group.dimensions as Vec3, command);
+      const dimensions = relativeDimensions(group.dimensions as Vec3, command);
       return replanGroup(
         group.id,
         {
@@ -613,12 +667,12 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
     }
     if (command.action === 'resize') {
       const current = state.design.objects.find((o) => o.id === targetId)!.dimensions as Vec3;
-      // Absolute wins when given; otherwise "20 centimetres wider" is resolved HERE,
-      // against the real current size, which is the only place that number exists.
-      const dimensions = command.dimensions
-        ? (command.dimensions as Vec3)
-        : relativeDimensions(current, command);
-      if (!dimensions) return rejected('Tell me the new size, or how much to change it by.');
+      // One resolver for every way a size can arrive: a full tuple from code, a single
+      // axis from speech, or a delta. All of it against the real current size, which is
+      // the only place that number exists.
+      const dimensions = relativeDimensions(current, command);
+      if (!dimensions)
+        return rejected('Tell me the new size — how wide, how tall, or how much to change it by.');
       if (dimensions.some((v: number) => v <= 0))
         return rejected('That would leave it with no size at all.', 'invalid_parameters');
       // A member of a group re-plans the group, so spacing keeps up with the new width

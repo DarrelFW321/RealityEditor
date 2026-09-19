@@ -17,6 +17,7 @@ import {
 import { buildObject } from '@reality/scene-recipes';
 import { SceneRecipeSchema, ShellSchema } from '@reality/contracts';
 import { expandLegacyPlan } from './legacy-style';
+import { recipeTool, voiceTool } from './editor';
 import { roomToSession } from '../adapters/room-conversion';
 import { applyToPoint, roomFromWorld } from '../adapters/room-space';
 import type { EditorState, EditResult, InteractionContext, Vec3 } from '@reality/contracts';
@@ -1244,6 +1245,50 @@ export const scenarios: Scenario[] = [
     },
   },
   // ---------------------------------------------------------------- M7
+  {
+    id: 'tool-schema',
+    title: 'The voice tools ship a schema the model can actually use',
+    milestone: 'M7',
+    gate: 'voice',
+    scene: sampleRoom,
+    run: async (editor) => {
+      const steps: StepResult[] = [];
+      // `z.toJSONSchema` emits correct 2020-12 tuple syntax and OpenAI's function
+      // validator rejects it, so `dimensions` made the whole edit_room schema unusable
+      // and the assistant reported that it could not resize anything. Checked on the
+      // SHIPPED object, because the bug was in the encoding and not in the logic.
+      const rejected: string[] = [];
+      const walk = (node: unknown, path: string) => {
+        if (Array.isArray(node)) return node.forEach((n, i) => walk(n, `${path}[${i}]`));
+        if (!node || typeof node !== 'object') return;
+        for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+          if (key === 'prefixItems' || key === '$schema' || key === 'additionalItems')
+            rejected.push(`${path}.${key}`);
+          if (key === 'items' && value === false) rejected.push(`${path}.items=false`);
+          walk(value, `${path}.${key}`);
+        }
+      };
+      for (const tool of [voiceTool, recipeTool]) walk(tool.parameters, tool.name);
+      steps.push(check('no keyword the API rejects survives', rejected.length === 0, rejected.join(', ') || 'clean'));
+
+      const properties = (voiceTool.parameters as { properties: Record<string, unknown> }).properties;
+      steps.push(check('resize is expressible without a tuple', ['width_m', 'height_m', 'depth_m', 'width_delta_m'].every((k) => k in properties), Object.keys(properties).filter((k) => /_m$/.test(k)).join(', ')));
+
+      // Every phrasing a model might reach for, including one axis at a time.
+      const floor = floorId(editor);
+      await editor.intent({ action: 'add', family: 'table' }, context(editor, { position: [0, 0, 0], surfaceId: floor, kind: 'surface' }));
+      const id = editor.engine.getSnapshot().scene.design.objects[0]?.id;
+      const dims = () => editor.engine.getSnapshot().scene.design.objects[0]?.dimensions ?? [];
+      const wide = await editor.intent({ action: 'resize', target_id: id, width_m: 1.4 }, context(editor, null));
+      steps.push(check('an absolute single axis resizes', wide.status === 'applied' && Math.abs((dims()[0] ?? 0) - 1.4) < 1e-6, `${describe(wide)} -> ${dims().join(' x ')}`));
+      steps.push(check('the untouched axes keep their size', Math.abs((dims()[1] ?? 0) - 0.75) < 1e-6, dims().join(' x ')));
+      const wider = await editor.intent({ action: 'resize', target_id: id, width_delta_m: 0.2 }, context(editor, null));
+      steps.push(check('a relative change resolves from the current size', wider.status === 'applied' && Math.abs((dims()[0] ?? 0) - 1.6) < 1e-6, dims().join(' x ')));
+      const silent = await editor.intent({ action: 'resize', target_id: id }, context(editor, null));
+      steps.push(check('no size at all asks rather than guesses', silent.status === 'rejected' && /how wide/i.test(silent.message), silent.message));
+      return steps;
+    },
+  },
   {
     id: 'restyle-bedroom',
     title: 'A blue bedroom with three frames on the window wall',
