@@ -26,3 +26,9 @@ mobile/ios/
 mobile/android/
 mobile/dist/
 server/.sessions/
+
+# Reconstruction worker: model weights are hundreds of MB and fetched on demand,
+# stage dumps are debugging output.
+models/
+workers/reconstruction/.selftest-out/
+workers/reconstruction/__pycache__/

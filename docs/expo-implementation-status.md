@@ -23,7 +23,7 @@ Implementation started 2026-09-18. This is a working migration foundation, not a
 | M2 Spatial engine | Implemented; gate scenarios pass locally | Relation and occupancy recomputation (M6), `APPLY_STYLE` expansion (M7), device demonstration |
 | M3 Carry/release | Implemented; gate scenarios pass locally | Device demonstration |
 | M4 Calibration | Implemented; gate scenarios pass locally against replayed captures | Device captures; non-LiDAR capture route; multiroom handling |
-| M5 Reconstruction | Stage A complete: the round trip runs end to end against a fake worker, gated 9/9 | Stage B the SAM/LaMa worker; Stage C the registered preview; verified cleanup across external providers |
+| M5 Reconstruction | Implemented; SAM and LaMa run; gate scenarios pass locally | Device capture; verified cleanup across external providers |
 | M6 Hands/voice | Integration written | Device audio, fingertip alignment, turn/context timing and concurrent input demonstration |
 | M7 Creation/restyle | Procedural additions and basic edits implemented | General room-aware layout search, count-change groups, grouped mask/scene transactions, supported unusual assemblies |
 | M8 Compositing | Not implemented | Empty-shell textures, hand-preserving occlusion, temporal consistency |
@@ -513,6 +513,149 @@ ever be checked by hand.
 **Stage A produces no pixels.** The atlas in these runs is a 1×1 PNG from the fake. The
 "clean-shell preview stays registered across viewpoints" clause needs Stage B's worker and
 Stage C's renderer, and is still open.
+
+## M5 Stage B — the reconstruction worker
+
+`workers/reconstruction/`, the path the plan already named. Python, because the model
+libraries are and the PRD explicitly permits it for workers; it does not replace Fastify and
+introduces no FastAPI — transport is one POST handler on the standard library, because a
+single-route service does not need a framework.
+
+### The contract had to grow, once
+
+`ReconstructionInput` carried only keyframes. The worker cannot project without the room:
+the planes to project onto, the volumes to reject, and — critically — `origin`, because
+keyframe poses are in raw ARKit world space while the scene is recentred on its floor
+centroid. `ReconstructionRoomSchema` now travels with the session it calibrates.
+`reconstructionRoom()` derives it from the scene in one place so the mapping is testable
+without a server. Obstacles come from `measured`, not `design`: a sofa already deleted from
+the design is still in the photographs, so its pixels must still be rejected.
+
+### The stages
+
+- **Segment.** Two sources, unioned. Geometry projects each measured box into each keyframe
+  — exact, temporally stable, free — dilated 6% with a 10cm contact-shadow skirt, both
+  constants taken from the prior art rather than guessed. SAM catches clutter RoomPlan never
+  categorised, which geometry cannot see. Unioned rather than substituted, so a segmenter
+  having a bad day can add false positives but cannot un-mask the sofa.
+- **Project.** One atlas per surface at 256 px/m, metric by construction. Per texel: project
+  into every keyframe, reject anything the mask covers, weight by the cosine of the grazing
+  angle, accumulate. Texels no camera ever saw carry zero weight and become holes. This is
+  the step that makes the result world-consistent — the PRD notes that inpainting each frame
+  independently "would introduce flicker and changing geometry".
+- **Complete.** LaMa when weights are present, a deterministic nearest-texel fill otherwise.
+  The fallback is not a stopgap; it is the baseline the PRD asks LaMa to be compared against.
+- **Emit.** `shell.json` is a self-contained mesh with its own UVs, deliberately not an
+  extension of RSG `Surface` — that schema is frozen with `additionalProperties: false` and
+  has nowhere to hang a UV. Room space throughout, so the client needs no world-frame
+  knowledge. Every surface carries `observedFraction` and its own `inferred` flag.
+
+Each stage dumps its own artifact under `--dump`, which the plan requires so a bad result is
+traceable to the stage that caused it: per-keyframe masks, and per surface the observed-only
+projection, the hole mask, and the completed texture.
+
+### Stage B evidence
+
+`npm run gate` now runs three suites: app 24/24, server 9/9, and the worker self-test.
+
+The self-test is synthetic on purpose. It renders a room whose walls carry a checkerboard
+and a marker at a known position, photographs it from six poses with real perspective, runs
+the actual pipeline over those photographs, and maps the marker back through the shell
+document's own positions and UVs — the exact interpolation a renderer performs.
+
+**Registration error: 0.3 cm.** Found `[0.998, 1.252, 2.0]` against ground truth
+`[1.0, 1.25, 2.0]`. A real capture would only prove the pipeline runs; a scene with known
+ground truth is the only thing that proves it runs *correctly*, and an error of tens of
+centimetres looks perfectly convincing in a photograph.
+
+Also measured: 57% floor and 91% wall coverage with furniture present, rising to 90% floor
+once the furniture is gone; the masked object named in `removedObjectIds`; and an empty room
+skipping the erase pass entirely, as the PRD requires.
+
+Verified over the **full chain** — mobile client → Fastify → real Python worker — in 1.8s,
+returning a valid 1.4MB PNG atlas and a shell document with correct UVs, fetched back
+through the artifact route.
+
+### Two bugs the self-test caught
+
+Both were in the harness rather than the pipeline, which is the point of having ground truth:
+
+- The renderer built its camera from room-space eyes and then subtracted the origin again,
+  putting the camera metres outside the room. Every keyframe was pure black. The pipeline
+  reported it honestly — geometry seen, coverage accumulated, colour zero — rather than
+  producing something plausible.
+- The first registration check assumed the wall's u axis ran along +X and reported a 2m
+  error. It runs toward −X. Testing against an assumed convention only proves the test
+  agrees with itself, so the check now goes through the shell contract the client will use.
+
+### Models: verified, and three assumptions were wrong
+
+Weights are now fetched and both models run. The ONNX signatures did not match what the
+published SAM and LaMa contracts implied, and every mismatch produced plausible-looking
+output rather than an error:
+
+- **The SAM encoder takes HWC float at native resolution**, not a normalised NCHW 1024²
+  letterbox. Feeding it the textbook tensor produced masks offset by a factor of 960/1024.
+- **`orig_im_size` must be `[1024, 1024]`, not the image size.** Passing the true size put
+  every mask 6% off. Measured against a synthetic target: 1px error at 960×720, 3px at
+  1920×1440, 99.2% coverage of the object.
+- **LaMa returns 0–255 already.** Scaling the output by 255 — the symmetric-looking thing
+  to do after dividing the input — saturates every filled texel to white. Verified by
+  inpainting a striped test tile: hole mean 103.7 against a ground truth of 102.3, stddev
+  29.9 against 29.4, so it genuinely reconstructs the pattern rather than smearing.
+
+All three were found by measuring against known ground truth, which is the only reason
+they were found at all.
+
+Both paths are reported per request. On the self-test room: geometric masks alone give
+1,219,971 masked pixels in 1.2s; with SAM the model contributes a further 984,095 and
+completion switches to LaMa, at 25s. The deterministic fill remains the comparison
+baseline the PRD asks for rather than a stopgap.
+
+**Still not evaluated:** the PRD requires SAM-family masks and LaMa to be compared
+independently before one is selected. Both now run; neither has been judged against the
+other on real captures.
+
+## M5 Stage C — the registered preview
+
+`ShellView` draws the reconstructed shell as 3D content in the room, which is M5's half of
+the split. It is **not** compositing: the real furniture is still in the camera behind it.
+The PRD is explicit that "the first milestone is not equivalent to completing live
+diminished reality", and replacing camera pixels is M8.
+
+- **Strictly additive.** It renders only when a shell exists; `SceneView`'s own floor and
+  wall meshes are untouched, so with no shell the scene behaves exactly as before. Off by
+  default behind a **Show empty room** toggle, because the measured room is the working
+  surface and the shell is something to look at, not something that silently replaces what
+  you were editing against.
+- **`ShellSchema` parses what arrives.** The worker is a replaceable part, and this is the
+  only thing between a malformed mesh and the renderer.
+- **The texture path already existed and had never been used.** R3F's native entry ships a
+  `TextureLoader` that resolves through `expo-asset` and uploads via EXGL, with both Pods
+  linked since the project started. The atlas is written to a cache file and loaded from
+  its URI — no new dependency, and no multi-megabyte data URL.
+- **Unlit material.** The atlas already contains the room's own photographed lighting;
+  lighting it again would double every shadow that was captured.
+- **An inferred surface is dimmed**, not drawn as though it were photographed. Unknown
+  space must not read as verified space, in appearance as much as in geometry.
+
+### Stage C evidence
+
+A real `shell.json`, emitted by the worker from its self-test room, is checked in as a
+fixture and gated by `calib-shell` — so the client's parsing and UV handling are verified
+without the worker running, and a change to either side that breaks the other is caught.
+
+It asserts the worker's own output validates; that it is in room space; one UV per vertex;
+UVs inside the atlas; indices in range; that the floor is the measured 4.00m × 4.00m and
+the wall reaches the measured 2.50m ceiling; that each surface reports how much was
+observed; and that a well-observed surface is never labelled inferred.
+
+App gate is now 25/25, server 9/9, worker self-test passing, and the Hermes bundle still
+evaluates with `ShellView` and the texture loader in it.
+
+**Not verified:** nothing has drawn a shell on a device. The geometry, the UVs and the
+contract are gated; that the texture actually uploads through EXGL on hardware is not, and
+that is the one thing this stage cannot prove off-device.
 
 ## Worker integration
 

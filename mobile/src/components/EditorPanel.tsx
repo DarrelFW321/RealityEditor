@@ -62,6 +62,10 @@ export function EditorPanel({
     [dev, setDev] = useState(false);
   const [, refreshDiagnostics] = useState(0);
   const [sceneSize, setSceneSize] = useState<{ width: number; height: number } | null>(null);
+  // The shell is a preview of the room without its furniture. Off by default: the
+  // measured room is the working surface, and the shell is something you turn on to look
+  // at rather than something that silently replaces what you were editing against.
+  const [showShell, setShowShell] = useState(false);
   const [gate, setGate] = useState<ScenarioResult[]>([]);
   const [gateRunning, setGateRunning] = useState<Scenario['milestone'] | null>(null);
   const [gateMilestone, setGateMilestone] = useState<Scenario['milestone'] | null>(null);
@@ -251,6 +255,8 @@ export function EditorPanel({
           frame={frame}
           origin={origin}
           diagnostics={dev}
+          shell={showShell && reconstruction?.state === 'ready' ? reconstruction.shell : null}
+          atlasUri={reconstruction?.state === 'ready' ? reconstruction.atlasUri : null}
           onRenderFps={(fps) => {
             renderFps.current = fps;
           }}
@@ -418,11 +424,26 @@ export function EditorPanel({
               : reconstruction.state === 'reconstructing'
                 ? `Building the empty-room preview — ${reconstruction.stage}…`
                 : reconstruction.state === 'ready'
-                  ? `Empty-room preview ready: ${reconstruction.manifest.artifacts.length} inferred artifacts.`
+                  ? `Empty-room preview ready — ${reconstruction.shell.surfaces.length} surfaces, filled by ${reconstruction.shell.completion}.`
                   : reconstruction.state === 'unavailable'
                     ? reconstruction.reason
                     : `Empty-room preview failed: ${reconstruction.reason}. The measured room is unaffected.`}
           </Text>
+        )}
+        {reconstruction?.state === 'ready' && (
+          <View style={styles.row}>
+            <Button
+              title={showShell ? 'Hide empty room' : 'Show empty room'}
+              onPress={() => setShowShell(!showShell)}
+            />
+            {showShell && (
+              <Text style={styles.detail}>
+                {reconstruction.shell.surfaces.filter((s) => s.inferred).length} of{' '}
+                {reconstruction.shell.surfaces.length} surfaces are mostly inferred and are
+                dimmed. Real furniture is still in the camera; only the shell is clean.
+              </Text>
+            )}
+          </View>
         )}
         {snapshot.scene.removedPhysicalIds.length > 0 && (
           <Text style={styles.detail}>

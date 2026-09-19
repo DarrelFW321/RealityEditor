@@ -13,7 +13,7 @@ import {
   type TrackedFrame,
 } from '../src/adapters/roomplan';
 import type { Keyframe } from '@reality/contracts';
-import { CoverageTracker, type CoverageMask } from '@reality/spatial-engine';
+import { CoverageTracker, reconstructionRoom, type CoverageMask } from '@reality/spatial-engine';
 import { ReconstructionRun, type ReconstructionPhase } from '../src/runtime/reconstruction';
 import type { Vec3 } from '@reality/contracts';
 
@@ -121,6 +121,7 @@ export default function Home() {
       run.subscribe(setRecon);
       await run.run(
         keyframes.current,
+        reconstructionRoom(converted.scene, converted.origin),
         converted.scene.calibrationRevision,
         converted.scene.frameId,
         // The scene adopts the server's id; the token stays inside the run.

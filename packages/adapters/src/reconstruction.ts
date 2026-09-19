@@ -1,6 +1,8 @@
 import {
   JobSchema,
   KeyframeSchema,
+  ReconstructionRoomSchema,
+  type ReconstructionRoom,
   type Keyframe,
   type ReconstructionAdapter,
   type ReconstructionJob,
@@ -35,11 +37,18 @@ export class HttpReconstructionClient implements ReconstructionAdapter {
     }
     return response;
   }
-  async create(revision: number, frameId: string, signal: AbortSignal) {
+  async create(
+    revision: number,
+    frameId: string,
+    room: ReconstructionRoom,
+    signal: AbortSignal,
+  ) {
     if (this.session) throw new Error('Dispose the previous calibration before creating another.');
     const response = await this.request('/calibrations', {
       method: 'POST',
-      body: JSON.stringify({ revision, frameId }),
+      // The room travels with the session it calibrates; the worker cannot project without
+      // the planes, the volumes to reject, or the origin that reconciles pose frames.
+      body: JSON.stringify({ revision, frameId, room: ReconstructionRoomSchema.parse(room) }),
       signal,
     });
     const data = (await response.json()) as { id?: string; token?: string };

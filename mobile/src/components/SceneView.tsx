@@ -2,6 +2,8 @@ import { useMemo, useRef, type MutableRefObject } from 'react';
 import { Canvas, useFrame, type ThreeEvent } from '@react-three/fiber/native';
 import { Shape, Matrix4, Vector2 } from 'three';
 import { roomFromWorld } from '../adapters/room-space';
+import { ShellView } from './ShellView';
+import type { Shell } from '@reality/contracts';
 import { parts, type EngineSnapshot } from '@reality/spatial-engine';
 import type { Vec3 } from '@reality/contracts';
 import type { TrackedFrame } from '../adapters/roomplan';
@@ -53,6 +55,8 @@ export function SceneView({
   frame,
   origin = [0, 0, 0],
   diagnostics = false,
+  shell,
+  atlasUri,
   onRenderFps,
 }: {
   snapshot: EngineSnapshot;
@@ -63,6 +67,9 @@ export function SceneView({
   frame?: MutableRefObject<TrackedFrame | null>;
   origin?: Vec3;
   diagnostics?: boolean;
+  /** The reconstructed empty-room shell, when one exists. Purely additive. */
+  shell?: Shell | null;
+  atlasUri?: string | null;
   onRenderFps?: (fps: number) => void;
 }) {
   const scene = snapshot.previewScene ?? snapshot.scene;
@@ -163,6 +170,9 @@ export function SceneView({
             </group>
           );
         })}
+      {/* Drawn before the helpers and after the room so it sits behind editable content.
+          Renders nothing at all when no shell has been reconstructed. */}
+      {shell && <ShellView shell={shell} atlasUri={atlasUri ?? null} />}
       {!frame && <gridHelper args={[8, 16, '#677d92', '#334254']} />}
       {diagnostics && (
         <group>

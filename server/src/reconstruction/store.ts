@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 import { mkdir, writeFile, readFile, rm, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Keyframe, ReconstructionJob } from '@reality/contracts';
+import type { Keyframe, ReconstructionJob, ReconstructionRoom } from '@reality/contracts';
 import { assertConsistent, type ReconstructionInput, type ReconstructionProvider } from './provider.js';
 
 type Session = {
@@ -10,6 +10,8 @@ type Session = {
   expires: number;
   revision: number;
   frameId: string;
+  /** The room this calibration is of. Immutable for the session's life. */
+  room: ReconstructionRoom;
   frames: Map<string, Keyframe>;
   bytes: number;
   uploads: number;
@@ -42,7 +44,7 @@ export class CalibrationStore {
       if (/^[0-9a-f-]{36}$/.test(id))
         await rm(join(this.root, id), { recursive: true, force: true });
   }
-  async create(revision: number, frameId: string) {
+  async create(revision: number, frameId: string, room: ReconstructionRoom) {
     await this.expire();
     if (this.sessions.size >= 32) throw new Error('capacity');
     const id = randomUUID(),
@@ -53,6 +55,7 @@ export class CalibrationStore {
       expires: Date.now() + TTL,
       revision,
       frameId,
+      room,
       frames: new Map(),
       bytes: 0,
       uploads: 0,
@@ -153,6 +156,7 @@ export class CalibrationStore {
         calibrationId: s.id,
         calibrationRevision: s.revision,
         frameId: s.frameId,
+        room: s.room,
         keyframes,
       };
       const output = await this.provider!.reconstruct(input, controller.signal);

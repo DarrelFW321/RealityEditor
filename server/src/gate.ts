@@ -38,6 +38,20 @@ const jpeg = (size = 64) => {
   return bytes.toString('base64');
 };
 
+/** A 4x4m room with one obstacle, in room space. Matches what `reconstructionRoom` emits. */
+const room = () => ({
+  origin: [7.3, 0, -4.1],
+  surfaces: [
+    { id: 'floor-main', class: 'floor' as const, normal: [0, 1, 0], inferred: false,
+      polygon: [[-2, 0, -2], [2, 0, -2], [2, 0, 2], [-2, 0, 2]] },
+    { id: 'wall-north', class: 'wall' as const, normal: [0, 0, -1], inferred: false,
+      polygon: [[-2, 0, 2], [2, 0, 2], [2, 2.5, 2], [-2, 2.5, 2]] },
+    { id: 'wall-west', class: 'wall' as const, normal: [1, 0, 0], inferred: true,
+      polygon: [[-2, 0, -2], [-2, 0, 2], [-2, 2.5, 2], [-2, 2.5, -2]] },
+  ],
+  obstacles: [{ id: 'obj-bed', center: [-1, 0, -1], size: [1.53, 0.6, 2.03], yaw: 0 }],
+});
+
 const keyframe = (frameId: string, id = randomUUID()) => ({
   id,
   timestamp: 1_700_000_000,
@@ -76,7 +90,7 @@ async function calibrate(h: Harness, frameId: string, frames = 2, revision = 0) 
   const created = await h.app.inject({
     method: 'POST',
     url: '/calibrations',
-    payload: { revision, frameId },
+    payload: { revision, frameId, room: room() },
   });
   const { id, token } = created.json() as { id: string; token: string };
   const auth = { authorization: `Bearer ${token}` };
@@ -130,6 +144,10 @@ const scenarios: { id: string; title: string; run: () => Promise<StepResult[]> }
         };
         steps.push(check('the job completes', done.status === 'completed' && done.stage === 'ready', `${done.status}/${done.stage}`));
         steps.push(check('all six keyframes reached the worker', h.provider.calls[0]?.keyframes.length === 6, `${h.provider.calls[0]?.keyframes.length ?? 0} forwarded`));
+        const forwarded = h.provider.calls[0]?.room;
+        steps.push(check('the room reached the worker too', forwarded?.surfaces.length === 3 && forwarded.obstacles.length === 1, `${forwarded?.surfaces.length ?? 0} surfaces, ${forwarded?.obstacles.length ?? 0} obstacles`));
+        steps.push(check('the world origin is carried, so poses can be placed', forwarded?.origin[0] === 7.3 && forwarded.origin[2] === -4.1, forwarded?.origin.join(', ') ?? 'missing'));
+        steps.push(check('already-inferred surfaces are flagged', forwarded?.surfaces.some((x) => x.inferred) ?? false, 'wall-west inferred'));
         steps.push(check('the manifest carries a shell and an atlas', ['shell', 'atlas'].every((r) => done.result?.artifacts.some((a) => a.role === r)), done.result?.artifacts.map((a) => a.role).join(', ') ?? 'none'));
         steps.push(check('generated content is marked inferred', done.result?.artifacts.every((a) => a.inferred) ?? false, 'every artifact inferred'));
 
@@ -205,6 +223,9 @@ const scenarios: { id: string; title: string; run: () => Promise<StepResult[]> }
           payload: { metadata: keyframe('frame-B'), jpegBase64: jpeg() },
         });
         steps.push(check('a keyframe from another frame is refused', wrongFrameUpload.statusCode === 409 && (wrongFrameUpload.json() as { error: string }).error === 'invalid_state', (wrongFrameUpload.json() as { error: string }).error));
+
+        const noRoom = await h.app.inject({ method: 'POST', url: '/calibrations', payload: { revision: 0, frameId: 'frame-A' } });
+        steps.push(check('a session without a room is refused', noRoom.statusCode === 400, `HTTP ${noRoom.statusCode}`));
       } finally {
         await h.app.close();
         await rm(h.root, { recursive: true, force: true });
@@ -371,7 +392,7 @@ const scenarios: { id: string; title: string; run: () => Promise<StepResult[]> }
         const health = (await app.inject({ method: 'GET', url: '/health' })).json() as { reconstruction: string | null };
         steps.push(check('health reports it too', health.reconstruction === null, 'null'));
 
-        const created = await app.inject({ method: 'POST', url: '/calibrations', payload: { revision: 0, frameId: 'frame-A' } });
+        const created = await app.inject({ method: 'POST', url: '/calibrations', payload: { revision: 0, frameId: 'frame-A', room: room() } });
         const { id, token } = created.json() as { id: string; token: string };
         const auth = { authorization: `Bearer ${token}` };
         for (let i = 0; i < 2; i++)

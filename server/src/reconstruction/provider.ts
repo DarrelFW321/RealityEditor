@@ -1,10 +1,16 @@
 import { z } from 'zod';
-import { ReconstructionManifestSchema, type Keyframe } from '@reality/contracts';
+import {
+  ReconstructionManifestSchema,
+  type Keyframe,
+  type ReconstructionRoom,
+} from '@reality/contracts';
 
 export interface ReconstructionInput {
   calibrationId: string;
   calibrationRevision: number;
   frameId: string;
+  /** Planes to project onto and volumes to reject, in room space. */
+  room: ReconstructionRoom;
   keyframes: { metadata: Keyframe; jpegBase64: string }[];
 }
 const OutputSchema = z

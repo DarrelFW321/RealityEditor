@@ -1,0 +1,6 @@
+# The worker's own dependencies. The Fastify server needs none of these — it only ever
+# proxies base64, which is why no JavaScript imaging library was added for M5.
+numpy>=1.26
+opencv-python-headless>=4.9
+# Only needed once weights are fetched; the pipeline runs without either model.
+onnxruntime>=1.17

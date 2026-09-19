@@ -16,6 +16,7 @@ import lowConfidenceWall from '../../../contracts/fixtures/rooms/captures/low-co
 import noFloor from '../../../contracts/fixtures/rooms/captures/no-floor.capture.json';
 import twoWalls from '../../../contracts/fixtures/rooms/captures/two-walls.capture.json';
 import offsetOrigin from '../../../contracts/fixtures/rooms/captures/offset-origin.capture.json';
+import shellExample from '../../../contracts/fixtures/rooms/captures/shell.example.json';
 
 export type CaptureName =
   | 'empty-room'
@@ -35,6 +36,13 @@ const captures: Record<CaptureName, unknown> = {
    * like unless the user happened to start in the exact centre of the room. */
   'offset-origin': offsetOrigin,
 };
+
+/**
+ * A real `shell.json`, emitted by the Python worker from the synthetic room its self-test
+ * renders. Checked in so the client's parsing and UV handling are gated without needing
+ * the worker running, and so a change to either side that breaks the other is caught.
+ */
+export const exampleShell = () => shellExample as unknown;
 
 /** `roomToSession` takes the raw string the native event carries, so hand it one. */
 export const capture = (name: CaptureName): string => JSON.stringify(captures[name]);

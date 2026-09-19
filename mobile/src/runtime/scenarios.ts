@@ -1,10 +1,12 @@
 import {
   capture,
+  exampleShell,
   sampleRoomFurnished,
   sampleRoomWithBuiltIn,
   sweepFrames,
 } from '@reality/dev-scenarios';
 import { buildIndex, CoverageTracker, evaluateCoverage } from '@reality/spatial-engine';
+import { ShellSchema } from '@reality/contracts';
 import { roomToSession } from '../adapters/room-conversion';
 import { applyToPoint, roomFromWorld } from '../adapters/room-space';
 import type { EditorState, EditResult, InteractionContext, Vec3 } from '@reality/contracts';
@@ -40,7 +42,8 @@ export type Scenario = {
     | 'confidence'
     | 'incomplete'
     | 'recovery'
-    | 'anchor';
+    | 'anchor'
+    | 'shell';
   scene: () => EditorState;
   run: (editor: Editor) => Promise<StepResult[]>;
 };
@@ -723,6 +726,40 @@ export const scenarios: Scenario[] = [
       steps.push(check('a malformed anchor falls back safely', dist(at(roomFromWorld([1, 2, 3], origin), world), room) < 1e-6, 'ignored, static origin used'));
       // The identity anchor must agree with the scan-time origin exactly.
       steps.push(check('an unrevised anchor matches the static origin', dist(at(roomFromWorld(atScan, origin), world), room) < 1e-6, 'agree to 1e-6'));
+      return steps;
+    },
+  },
+  {
+    id: 'calib-shell',
+    title: 'The reconstructed shell maps to real room geometry',
+    milestone: 'M4',
+    gate: 'shell',
+    scene: sampleRoomFurnished,
+    run: async () => {
+      const steps: StepResult[] = [];
+      const parsed = ShellSchema.safeParse(exampleShell());
+      steps.push(check("the worker's own output validates", parsed.success, parsed.success ? 'accepted' : JSON.stringify(parsed.error?.issues[0])));
+      if (!parsed.success) return steps;
+      const shell = parsed.data;
+
+      steps.push(check('it is in room space, not world space', shell.space === 'room', shell.space));
+      steps.push(check('every surface has one UV per vertex', shell.surfaces.every((s) => s.positions.length === s.uvs.length), shell.surfaces.map((s) => `${s.positions.length}/${s.uvs.length}`).join(' ')));
+      steps.push(check('UVs stay inside the atlas', shell.surfaces.every((s) => s.uvs.every(([u, v]) => u >= 0 && u <= 1 && v >= 0 && v <= 1)), 'all within 0..1'));
+      steps.push(check('indices address real vertices', shell.surfaces.every((s) => s.indices.every((i) => i < s.positions.length)), 'in range'));
+
+      // The geometry must be the measured room, not an approximation of it: a 4x4m floor
+      // and a wall of the right height, in the frame the editor already works in.
+      const floor = shell.surfaces.find((s) => s.class === 'floor');
+      const span = (points: number[][], axis: number) =>
+        Math.max(...points.map((p) => p[axis]!)) - Math.min(...points.map((p) => p[axis]!));
+      steps.push(check('the floor is the measured 4x4m', !!floor && Math.abs(span(floor.positions, 0) - 4) < 0.05 && Math.abs(span(floor.positions, 2) - 4) < 0.05, floor ? `${span(floor.positions, 0).toFixed(2)}m x ${span(floor.positions, 2).toFixed(2)}m` : 'no floor'));
+      const wall = shell.surfaces.find((s) => s.class === 'wall');
+      steps.push(check('the wall reaches the measured ceiling', !!wall && Math.abs(span(wall.positions, 1) - 2.5) < 0.05, wall ? `${span(wall.positions, 1).toFixed(2)}m tall` : 'no wall'));
+
+      // Provenance has to survive to the renderer, which dims an inferred surface.
+      steps.push(check('each surface reports how much was observed', shell.surfaces.every((s) => s.observedFraction > 0 && s.observedFraction <= 1), shell.surfaces.map((s) => `${s.id} ${(s.observedFraction * 100).toFixed(0)}%`).join(', ')));
+      steps.push(check('a well-observed surface is not called inferred', shell.surfaces.every((s) => (s.observedFraction >= 0.5 ? !s.inferred : true)), 'provenance agrees with coverage'));
+      steps.push(check('the completion method is recorded', shell.completion.length > 0, shell.completion));
       return steps;
     },
   },

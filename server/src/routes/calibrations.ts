@@ -1,11 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { KeyframeSchema } from '@reality/contracts';
+import { KeyframeSchema, ReconstructionRoomSchema } from '@reality/contracts';
 import { CalibrationStore } from '../reconstruction/store.js';
 
-const Create = z
+const Revision = z
   .object({ revision: z.number().int().nonnegative(), frameId: z.string().min(1).max(100) })
   .strict();
+/** A session is a calibration OF a room, so the room arrives with it. The worker needs the
+ * planes to project onto and the volumes to reject; without them it can only guess. */
+const Create = Revision.extend({ room: ReconstructionRoomSchema }).strict();
 const Upload = z
   .object({
     metadata: KeyframeSchema,
@@ -33,7 +36,9 @@ export async function registerCalibrationRoutes(app: FastifyInstance, store: Cal
     const data = Create.safeParse(request.body);
     if (!data.success) return reply.code(400).send({ error: 'invalid_calibration' });
     try {
-      return reply.code(201).send(await store.create(data.data.revision, data.data.frameId));
+      return reply
+        .code(201)
+        .send(await store.create(data.data.revision, data.data.frameId, data.data.room));
     } catch {
       return reply.code(503).send({ error: 'session_capacity' });
     }
@@ -70,7 +75,7 @@ export async function registerCalibrationRoutes(app: FastifyInstance, store: Cal
   app.post<{ Params: { id: string } }>('/calibrations/:id/reconstruct', async (request, reply) => {
     const session = store.authorize(request.params.id, request.headers.authorization);
     if (!session) return reply.code(404).send({ error: 'session_not_found' });
-    const data = Create.safeParse(request.body);
+    const data = Revision.safeParse(request.body);
     if (!data.success) return reply.code(400).send({ error: 'invalid_revision' });
     try {
       return reply.code(202).send(store.begin(session, data.data.revision, data.data.frameId));

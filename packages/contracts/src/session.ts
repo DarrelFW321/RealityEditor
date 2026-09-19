@@ -213,6 +213,105 @@ export const KeyframeSchema = z
   })
   .strict();
 export type Keyframe = z.infer<typeof KeyframeSchema>;
+/**
+ * The room a reconstruction is of.
+ *
+ * The worker cannot project without it. Keyframes carry pose and intrinsics but say
+ * nothing about where the walls are, which volumes to mask, or — critically — which frame
+ * the poses are in: `cameraToWorld` is raw ARKit world space while the scene is recentred
+ * on its floor centroid, so `origin` is what reconciles the two.
+ *
+ * Geometry is sent in ROOM space; only `origin` refers to the world frame. Sending the
+ * room rather than letting the worker infer one keeps the phone authoritative for geometry,
+ * which is the rule the whole architecture rests on.
+ */
+export const ReconstructionRoomSchema = z
+  .object({
+    /** Room origin in ARKit world coordinates. Subtract to bring a pose into room space. */
+    origin: Vec3Schema,
+    /** Planes to project onto, room space, counter-clockwise about the normal. */
+    surfaces: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1).max(100),
+            class: z.enum(['wall', 'floor']),
+            polygon: z.array(Vec3Schema).min(3).max(64),
+            normal: Vec3Schema,
+            /** Already inferred by calibration. Its texels can never be observed. */
+            inferred: z.boolean(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(64),
+    /**
+     * Measured furniture to reject from the background, as upright boxes in room space.
+     * `center` is the base centre, matching the engine's `base_center` pivot.
+     */
+    obstacles: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1).max(100),
+            center: Vec3Schema,
+            size: Vec3Schema,
+            yaw: z.number().finite(),
+          })
+          .strict(),
+      )
+      .max(64),
+  })
+  .strict();
+export type ReconstructionRoom = z.infer<typeof ReconstructionRoomSchema>;
+
+/**
+ * The clean shell, as the worker emits it.
+ *
+ * A SELF-CONTAINED mesh: positions, UVs and per-surface provenance. Deliberately not an
+ * extension of the RSG `Surface` type — that schema is frozen with
+ * `additionalProperties: false` and has nowhere to hang a UV — so the shell travels beside
+ * the scene rather than inside it.
+ *
+ * Room space throughout, matching `EditorState.design`, so the renderer needs to know
+ * nothing about the ARKit world frame the keyframes were captured in.
+ */
+export const ShellSchema = z
+  .object({
+    space: z.literal('room'),
+    atlas: z
+      .object({
+        key: z.string().regex(/^[a-zA-Z0-9_-]+\.(png|jpg)$/),
+        width: z.number().int().positive().max(8192),
+        height: z.number().int().positive().max(8192),
+      })
+      .strict(),
+    /** Which completion implementation ran. Recorded so a result is never ambiguous. */
+    completion: z.string().max(32),
+    surfaces: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1).max(100),
+            class: z.enum(['wall', 'floor']),
+            positions: z.array(Vec3Schema).min(3).max(64),
+            uvs: z.array(z.tuple([z.number().finite(), z.number().finite()])).min(3).max(64),
+            indices: z.array(z.number().int().nonnegative()).min(3).max(192),
+            /** How much of this surface a camera actually saw, 0..1. */
+            observedFraction: z.number().min(0).max(1),
+            /** True when the appearance is mostly invented rather than observed. */
+            inferred: z.boolean(),
+          })
+          // One UV per position, or the renderer would read past the end of the array.
+          .refine((s) => s.positions.length === s.uvs.length, {
+            message: 'positions and uvs must correspond',
+          }),
+      )
+      .max(64),
+  })
+  .strict();
+export type Shell = z.infer<typeof ShellSchema>;
+
 export const ReconstructionManifestSchema = z
   .object({
     calibrationId: z.string(),

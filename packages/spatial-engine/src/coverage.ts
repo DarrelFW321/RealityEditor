@@ -1,4 +1,4 @@
-import type { EditorState, Vec3 } from '@reality/contracts';
+import type { EditorState, ReconstructionRoom, Vec3 } from '@reality/contracts';
 import { compass } from './solver';
 import type { P2 } from './geometry';
 
@@ -229,4 +229,41 @@ export function describeMissingView(missing: readonly WallCoverage[]): string | 
   if (first.side === 'nearby')
     return `Step sideways so a boundary hidden by furniture comes into view.${more}`;
   return `Turn toward the ${first.side} wall so it can be measured.${more}`;
+}
+
+/**
+ * The room, as the reconstruction worker needs to see it.
+ *
+ * Derived here rather than assembled at the call site so the mapping from scene to worker
+ * input has one definition and can be checked without a server. Everything is in ROOM
+ * space; `origin` is the only value in the world frame.
+ *
+ * Obstacles come from `measured`, not `design`. A sofa the user has already deleted from
+ * the design is still in the photographs, so its pixels must still be rejected — the same
+ * distinction the physical-obstacle collision layer makes.
+ */
+export function reconstructionRoom(scene: EditorState, origin: Vec3): ReconstructionRoom {
+  const surfaces = scene.design.surfaces
+    .filter((s) => (s.class === 'wall' || s.class === 'floor') && s.state === 'present')
+    .filter((s) => s.polygon.length >= 3)
+    .map((s) => ({
+      id: s.id,
+      class: s.class as 'wall' | 'floor',
+      polygon: s.polygon.map((p) => [p[0]!, p[1]!, p[2]!] as Vec3),
+      normal: [s.plane.normal[0]!, s.plane.normal[1]!, s.plane.normal[2]!] as Vec3,
+      inferred: s.provenance === 'inferred',
+    }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+  const obstacles = scene.measured.objects
+    .filter((o) => o.state === 'present')
+    .map((o) => ({
+      id: o.id,
+      center: [o.pose.position[0]!, o.pose.position[1]!, o.pose.position[2]!] as Vec3,
+      size: [o.dimensions[0]!, o.dimensions[1]!, o.dimensions[2]!] as Vec3,
+      yaw: o.pose.yaw,
+    }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+  return { origin, surfaces, obstacles };
 }
