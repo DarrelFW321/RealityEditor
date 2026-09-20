@@ -49,6 +49,23 @@ const CATEGORY_CASES: readonly (readonly [string, string])[] = [
   ['a ceramic table lamp', 'table_lamp'],
   ['a tall ceramic vase', 'vase'],
   ['a brass telescope', 'unknown'],
+  // Screens and office. The first three all name a desk or a chair before
+  // naming what they are, and resolved to `desk`/`chair` before these entries.
+  ['a desk monitor', 'monitor'],
+  ['a 27 inch monitor', 'monitor'],
+  ['a desk chair', 'office_chair'],
+  ['a task chair', 'office_chair'],
+  ['an office chair', 'office_chair'],
+  ['a television on a stand', 'television'],
+  ['a wall mounted tv', 'television'],
+  // Decor.
+  ['a marble statue', 'statue'],
+  ['a small bronze sculpture', 'statue'],
+  ['a framed painting', 'painting'],
+  ['a large canvas artwork', 'painting'],
+  ['a round wall mirror', 'mirror'],
+  ['a potted plant', 'plant'],
+  ['a terracotta planter', 'plant'],
 ];
 
 test('resolves one canonical phrase per category', () => {

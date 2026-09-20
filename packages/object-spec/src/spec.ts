@@ -37,6 +37,16 @@ const COLORS = new Map<string, string>([
 const CATEGORY_PATTERNS: readonly (readonly [string, RegExp])[] = [
   ['table_lamp', /\b(table lamp|desk lamp|bedside lamp)\b/i],
   ['floor_lamp', /\b(floor lamp|standing lamp|tripod lamp)\b/i],
+  // Before `desk`: "a desk monitor" and "a desk chair" both name the desk first.
+  ['monitor', /\b(monitor|computer screen)\b/i],
+  ['office_chair', /\b(office chair|desk chair|task chair|swivel chair|computer chair)\b/i],
+  ['television', /\b(television|tv|telly)\b/i],
+  // `bust` is deliberately absent — too common a word to match on safely.
+  ['statue', /\b(statue|sculpture|figurine)\b/i],
+  ['painting', /\b(painting|artwork|wall art|canvas)\b/i],
+  ['mirror', /\b(mirror)\b/i],
+  // \bplant\b cannot match "planter", so the alternation order is safe either way.
+  ['plant', /\b(plant|plants|houseplant|planter|fern|succulent)\b/i],
   ['coffee_table', /\b(coffee table|cocktail table)\b/i],
   ['nightstand', /\b(nightstand|night stand|bedside table|bedside cabinet)\b/i],
   ['sideboard', /\b(sideboard|credenza|buffet)\b/i],
@@ -123,6 +133,35 @@ const DEFAULTS: Record<string, Record<SizeClass, DimensionsM>> = {
   table_lamp: {
     medium: { width: 0.28, height: 0.48, depth: 0.28 },
     large: { width: 0.36, height: 0.62, depth: 0.36 },
+  },
+  // Screens include their stand: the object is what gets placed, not the panel.
+  television: {
+    medium: { width: 1.24, height: 0.78, depth: 0.25 },
+    large: { width: 1.67, height: 1.0, depth: 0.3 },
+  },
+  monitor: {
+    medium: { width: 0.62, height: 0.45, depth: 0.2 },
+    large: { width: 0.81, height: 0.52, depth: 0.24 },
+  },
+  office_chair: {
+    medium: { width: 0.65, height: 1.1, depth: 0.65 },
+    large: { width: 0.72, height: 1.25, depth: 0.72 },
+  },
+  statue: {
+    medium: { width: 0.3, height: 0.6, depth: 0.3 },
+    large: { width: 0.5, height: 1.2, depth: 0.5 },
+  },
+  painting: {
+    medium: { width: 0.6, height: 0.8, depth: 0.04 },
+    large: { width: 1.0, height: 1.4, depth: 0.05 },
+  },
+  mirror: {
+    medium: { width: 0.6, height: 0.8, depth: 0.04 },
+    large: { width: 0.9, height: 1.6, depth: 0.05 },
+  },
+  plant: {
+    medium: { width: 0.4, height: 0.8, depth: 0.4 },
+    large: { width: 0.7, height: 1.5, depth: 0.7 },
   },
   vase: {
     medium: { width: 0.28, height: 0.42, depth: 0.28 },

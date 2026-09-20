@@ -28,3 +28,17 @@ test('upholstered categories default to fabric, not painted wood', () => {
 test('neutral hard furniture reads as bare wood', () => {
   assert.equal(materialFromSpec(interpretPrompt({ prompt: 'a writing desk' })).family, 'wood');
 });
+
+test('statues and vases read as stone', () => {
+  assert.equal(materialFromSpec(interpretPrompt({ prompt: 'a statue' })).family, 'stone');
+  assert.equal(materialFromSpec(interpretPrompt({ prompt: 'a tall vase' })).family, 'stone');
+  // Explicit stone words win wherever they appear.
+  assert.equal(materialFromSpec(interpretPrompt({ prompt: 'a marble coffee table' })).family, 'stone');
+  assert.equal(materialFromSpec(interpretPrompt({ prompt: 'a concrete bench' })).family, 'stone');
+});
+
+test('office chairs are upholstered, screens are not furniture', () => {
+  assert.equal(materialFromSpec(interpretPrompt({ prompt: 'a task chair' })).family, 'fabric');
+  assert.equal(materialFromSpec(interpretPrompt({ prompt: 'a television' })).family, 'matte');
+  assert.equal(materialFromSpec(interpretPrompt({ prompt: 'a desk monitor' })).family, 'matte');
+});
