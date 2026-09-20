@@ -2,6 +2,8 @@ import { resolve } from 'node:path';
 import { buildApp } from './app.js';
 import { CalibrationStore } from './reconstruction/store.js';
 import { HttpReconstructionProvider } from './reconstruction/provider.js';
+import { ObjectStore } from './objects/store.js';
+import { MeshyObjectProvider } from './objects/provider.js';
 import { config } from './config.js';
 
 let log: ((code: string, detail: string) => void) | undefined;
@@ -15,7 +17,13 @@ const store = new CalibrationStore(
     : null,
   (code, detail) => log?.(code, detail),
 );
-const app = await buildApp(store);
+const objects = new ObjectStore(
+  resolve(config.objects.storageDir),
+  config.objects.meshyApiKey ? new MeshyObjectProvider(config.objects.meshyApiKey) : null,
+  config.objects.catalogDir ? resolve(config.objects.catalogDir) : null,
+  (code, detail) => log?.(code, detail),
+);
+const app = await buildApp({ calibration: store, objects });
 // Indirected through `log` because the store is constructed before the app that owns the
 // logger. Reason strings only; the redaction list already covers request headers.
 log = (code, detail) => app.log.error({ code, detail }, 'reconstruction');
@@ -43,7 +51,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const)
 try {
   await app.listen({ port: config.port, host: config.host });
   app.log.info(
-    `reality-editor server ready. reconstruction: ${store.providerId ?? 'not configured'}`,
+    `reality-editor server ready. reconstruction: ${store.providerId ?? 'not configured'}, ` +
+      `objects: ${objects.providerId ?? 'not configured'} (${objects.catalogInfo.entries} catalog)`,
   );
 } catch (err) {
   app.log.error(err);

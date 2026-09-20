@@ -5,6 +5,14 @@ import { config } from './config.js';
 import { registerSessionRoute } from './routes/session.js';
 import { registerPlanStyleRoute } from './routes/plan_style.js';
 import { registerInpaintRoute } from './routes/inpaint.js';
+import { registerObjectRoutes } from './routes/objects.js';
+import type { ObjectStore } from './objects/store.js';
+
+/** Objects is optional so a gate exercising only reconstruction need not build one. */
+export interface Stores {
+  calibration: CalibrationStore;
+  objects?: ObjectStore;
+}
 
 /**
  * Builds the app without binding a port.
@@ -18,9 +26,11 @@ import { registerInpaintRoute } from './routes/inpaint.js';
  * backed by a temporary directory and a fake provider.
  */
 export async function buildApp(
-  store: CalibrationStore,
+  stores: Stores | CalibrationStore,
   options: { logger?: boolean } = {},
 ): Promise<FastifyInstance> {
+  // Accept a bare CalibrationStore so existing callers and gates keep working.
+  const { calibration: store, objects } = 'calibration' in stores ? stores : { calibration: stores, objects: undefined };
   const app = Fastify({
     // Only meaningful when there is a logger, and Fastify 5 deprecation-warns on the option
     // itself — passing it with `logger: false` printed a warning per app the gate built.
@@ -52,11 +62,15 @@ export async function buildApp(
     // Whether reconstruction can run at all. Previously you had to call /capabilities to
     // find out, so a 503 from /reconstruct looked like a bug rather than "no worker set".
     reconstruction: store.providerId,
+    // Null when no object store was supplied at all, distinguishing "not wired"
+    // from "wired but no provider key".
+    objects: objects ? { provider: objects.providerId, catalog: objects.catalogInfo } : null,
   }));
 
   await registerSessionRoute(app);
   await registerPlanStyleRoute(app);
   await registerInpaintRoute(app);
   await registerCalibrationRoutes(app, store);
+  if (objects) await registerObjectRoutes(app, objects);
   return app;
 }

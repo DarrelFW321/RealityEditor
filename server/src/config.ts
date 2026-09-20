@@ -90,6 +90,17 @@ export const config = {
     model: "claude-sonnet-5",
     maxOps: 12,
   },
+
+  /**
+   * Text-to-3D object generation. An unset key means POST /objects reports 503
+   * rather than guessing — the same contract as every other provider here.
+   */
+  objects: {
+    meshyApiKey: credential("MESHY_API_KEY"),
+    storageDir: process.env.OBJECT_STORAGE_DIR ?? ".objects",
+    /** Pre-built catalog. Empty means every prompt takes the slow, paid path. */
+    catalogDir: process.env.OBJECT_CATALOG_DIR ?? "",
+  },
 } as const;
 
 export function missingKeyResponse(which: "OPENAI_API_KEY" | "ANTHROPIC_API_KEY") {

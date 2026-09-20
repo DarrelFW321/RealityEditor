@@ -32,3 +32,7 @@ server/.sessions/
 models/
 workers/reconstruction/.selftest-out/
 workers/reconstruction/__pycache__/
+
+# Furniture worker: downloaded weights, environments, generated assets, and trials.
+workers/furniture/.local/
+workers/furniture/.venv/
