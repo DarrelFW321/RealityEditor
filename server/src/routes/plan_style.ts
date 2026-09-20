@@ -145,6 +145,8 @@ export async function registerPlanStyleRoute(app: FastifyInstance) {
           "HARD RULES:",
           "- Use ONLY entity ids, catalog ids and material ids given below. Anything else is discarded.",
           "- The catalogue has already been filtered to what physically fits. Do not ask for more.",
+          "- If the requested kind of furniture has no large option in that filtered list, choose a",
+          "  smaller fitting option of the same class and say that substitution plainly in the summary.",
           "- Never emit coordinates, dimensions or distances. Express placement as relation + anchor;",
           "  the device's solver computes the pose against real geometry and may move it.",
           `- At most ${config.planner.maxOps} ops. Fewer and better beats more.`,

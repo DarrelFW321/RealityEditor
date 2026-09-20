@@ -205,6 +205,40 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    id: 'placement-smaller-fallback',
+    title: 'A new object falls back to an honestly reported smaller size',
+    milestone: 'M7',
+    gate: 'placement',
+    scene: sampleRoom,
+    run: async (editor) => {
+      const result = await editor.intent(
+        { action: 'add', family: 'cabinet', dimensions: [1.6, 1.6, 0.8] },
+        context(editor, onFloor(editor, [-1.6, 0, -1.7])),
+        'smaller-fallback',
+      );
+      const added = editor.engine
+        .getSnapshot()
+        .scene.design.objects.find((object) => object.id === 'smaller-fallback-0');
+      return [
+        check(
+          'a size conflict retries once and places the authored normal size',
+          result.status === 'adjusted' && added?.dimensions.join() === '0.8,0.8,0.5',
+          `${describe(result)} -> ${added?.dimensions.join(' x ') ?? 'nothing added'}`,
+        ),
+        check(
+          'the user is told that the requested dimensions changed',
+          /smaller/i.test(result.message) && result.caveats.some((caveat) => /reduced from/i.test(caveat)),
+          result.message,
+        ),
+        check(
+          'the failed first attempt never commits',
+          editor.engine.getSnapshot().scene.revision === 1 && editor.engine.getLog().length === 1,
+          `revision ${editor.engine.getSnapshot().scene.revision}, ${editor.engine.getLog().length} operation(s)`,
+        ),
+      ];
+    },
+  },
+  {
     id: 'overlap',
     title: 'Rejected overlap and door swing',
     milestone: 'M2',

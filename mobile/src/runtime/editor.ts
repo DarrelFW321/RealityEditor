@@ -884,29 +884,74 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
         (s) => s.id === context.destination?.surfaceId && s.class === 'wall' && s.state === 'present',
       );
       if (!floor || (mounted && !wall)) return rejected('Point at the mounting wall first.');
-      const additions: Extract<EditCommand, { type: 'add' }>[] = [];
       const origin = context.destination?.position ?? [0, 0, 0];
-      for (let i = 0; i < recipe.count; i++) {
-        const gap = 0.12;
-        const offset = (i - (recipe.count - 1) / 2) * (dimensions[0] + gap);
-        let position: Vec3 = [origin[0] + offset, 0, origin[2]];
-        let yaw = 0;
-        if (wall) {
-          const n = wall.plane.normal as Vec3;
-          yaw = wallFacingYaw(n);
-          const distance =
-            n[0] * origin[0] + n[1] * origin[1] + n[2] * origin[2] - wall.plane.offset;
-          position = [
-            origin[0] + n[0] * (dimensions[2] / 2 - distance) + Math.cos(yaw) * offset,
-            Math.max(0.2, origin[1] - dimensions[1] / 2),
-            origin[2] + n[2] * (dimensions[2] / 2 - distance) - Math.sin(yaw) * offset,
-          ];
+      const additionsAt = (candidateDimensions: Vec3) => {
+        const candidateRecipe = RecipeSchema.parse({ ...recipe, dimensions: candidateDimensions });
+        const additions: Extract<EditCommand, { type: 'add' }>[] = [];
+        for (let i = 0; i < candidateRecipe.count; i++) {
+          const gap = 0.12;
+          const offset =
+            (i - (candidateRecipe.count - 1) / 2) * (candidateDimensions[0] + gap);
+          let position: Vec3 = [origin[0] + offset, 0, origin[2]];
+          let yaw = 0;
+          if (wall) {
+            const n = wall.plane.normal as Vec3;
+            yaw = wallFacingYaw(n);
+            const distance =
+              n[0] * origin[0] + n[1] * origin[1] + n[2] * origin[2] - wall.plane.offset;
+            position = [
+              origin[0] + n[0] * (candidateDimensions[2] / 2 - distance) + Math.cos(yaw) * offset,
+              Math.max(0.2, origin[1] - candidateDimensions[1] / 2),
+              origin[2] + n[2] * (candidateDimensions[2] / 2 - distance) - Math.sin(yaw) * offset,
+            ];
+          }
+          const built = modules.buildObject(
+            candidateRecipe,
+            `${id}-${i}`,
+            position,
+            wall?.id ?? floor.id,
+          );
+          built.object.pose.yaw = yaw;
+          additions.push({ type: 'add', ...built });
         }
-        const built = modules.buildObject(recipe, `${id}-${i}`, position, wall?.id ?? floor.id);
-        built.object.pose.yaw = yaw;
-        additions.push({ type: 'add', ...built });
-      }
-      return engine.batch(additions, id, context.revision);
+        return additions;
+      };
+
+      const first = engine.batch(additionsAt(dimensions), id, context.revision);
+      if (first.status !== 'rejected' || !first.report?.violations_resolved.length) return first;
+
+      // A single requested item that misses the measured space gets one predictable
+      // size fallback. First prefer this family's authored normal size; when the request
+      // was already normal-sized, try 75% of it. The same solver and construction gates
+      // run again, so "smaller" can never mean intersecting, floating, or structurally
+      // invalid. Multi-object requests use the layout planner instead and remain atomic.
+      const normal = DEFAULT_DIMENSIONS[command.family] as Vec3;
+      const normalIsSmaller = normal.some((value, axis) => value < dimensions[axis]! - 1e-6);
+      const smaller = (normalIsSmaller
+        ? normal.map((value, axis) => Math.min(value, dimensions[axis]!))
+        : dimensions.map((value) => Number((value * 0.75).toFixed(4)))) as Vec3;
+      const second = engine.batch(additionsAt(smaller), id, context.revision);
+      if (second.status === 'rejected') return first;
+
+      const requested = dimensions.map((value) => value.toFixed(2)).join(' x ');
+      const applied = smaller.map((value) => value.toFixed(2)).join(' x ');
+      return {
+        ...second,
+        status: 'adjusted',
+        message: `The requested ${command.family} did not fit, so I placed a smaller ${applied}m version instead.`,
+        report: second.report
+          ? {
+              ...second.report,
+              status: 'adjusted',
+              adjustment_reason: `the requested ${requested}m size did not fit`,
+              violations_resolved: first.report.violations_resolved,
+            }
+          : second.report,
+        caveats: [
+          ...second.caveats,
+          `Size reduced from ${requested}m to ${applied}m to fit the measured space.`,
+        ],
+      };
     }
 
     const targetId = command.target_id ?? context.selectedId;
