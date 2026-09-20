@@ -21,6 +21,7 @@ import { recipeTool, voiceTool, VOICE_INSTRUCTIONS } from './editor';
 import { roomToSession } from '../adapters/room-conversion';
 import { applyToPoint, roomFromWorld } from '../adapters/room-space';
 import type { EditorState, EditResult, InteractionContext, Vec3 } from '@reality/contracts';
+import { setObjectCatalog } from './object-catalog';
 import { createEditor, type Editor } from './editor';
 import { compositingScenarios } from './compositing-scenarios';
 import { InputCoordinator, DESTINATION_MAX_AGE_MS } from './coordinator';
@@ -200,6 +201,59 @@ export const scenarios: Scenario[] = [
           'no hard violations were reported',
           (result.report?.violations_resolved.length ?? 0) === 0,
           `${result.report?.violations_resolved.length ?? 0} violations, ${result.report?.remaining_notes.length ?? 0} notes`,
+        ),
+      ];
+    },
+  },
+  {
+    id: 'placement-catalog-object',
+    title: 'A catalog id places the pre-built mesh at its own size',
+    milestone: 'M7',
+    gate: 'placement',
+    scene: sampleRoom,
+    run: async (editor) => {
+      setObjectCatalog([
+        {
+          id: 'three-seat-sofa',
+          category: 'sofa',
+          size: 'large',
+          materialFamily: 'fabric',
+          sha256: 'a'.repeat(64),
+          dimensionsM: { width: 2.3, height: 0.85, depth: 0.95 },
+        },
+      ]);
+      const placed = await editor.intent(
+        { action: 'add', catalog_id: 'three-seat-sofa' },
+        context(editor, onFloor(editor, [0, 0, -1.2])),
+        'catalog-add',
+      );
+      const added = editor.engine
+        .getSnapshot()
+        .scene.design.objects.find((object) => object.id === 'catalog-add-0');
+
+      // An id the model invented must not silently become some other object.
+      const invented = await editor.intent(
+        { action: 'add', catalog_id: 'not-a-real-object' },
+        context(editor, onFloor(editor, [1.5, 0, -1.2])),
+        'catalog-invented',
+      );
+      setObjectCatalog([]);
+
+      return [
+        check(
+          'the placed object points at the catalog mesh',
+          added?.asset_ref === 'catalog:three-seat-sofa',
+          `asset_ref ${added?.asset_ref ?? 'none'} (${describe(placed)})`,
+        ),
+        check(
+          "it takes the catalog entry's own dimensions, not a family default",
+          added?.dimensions.join() === '2.3,0.85,0.95',
+          added?.dimensions.join(' x ') ?? 'nothing added',
+        ),
+        check(
+          'an unknown catalog id is refused rather than substituted',
+          invented.status === 'rejected',
+          describe(invented),
         ),
       ];
     },

@@ -13,6 +13,7 @@ import type {
 } from '@reality/contracts';
 import { isAmbiguous } from '@reality/spatial-engine';
 import { recipeTool, voiceTool, VOICE_INSTRUCTIONS } from '../runtime/editor';
+import { catalogMenu } from '../runtime/object-catalog';
 import type { InputCoordinator } from '../runtime/coordinator';
 
 /**
@@ -168,7 +169,12 @@ export class RealtimeVoice implements VoiceAdapter {
                 },
               },
             },
-            instructions: VOICE_INSTRUCTIONS,
+            // The model cannot ask for a pre-built object it has never been told
+            // exists, so the menu is appended per session rather than baked into
+            // the static instructions — the catalog changes, the prompt does not.
+            instructions: catalogMenu()
+              ? `${VOICE_INSTRUCTIONS}\n\nPre-built objects available as catalog_id on the add action, to be preferred over family when one of them is what was asked for: ${catalogMenu()}.`
+              : VOICE_INSTRUCTIONS,
           },
         });
         this.status('Listening.');

@@ -17,6 +17,12 @@ import { textureBridgeAvailable } from '../adapters/frame-textures';
 import { shouldComposite, DEFAULT_COLOR, type ErasureVolume } from '@reality/spatial-engine';
 import type { Texture } from 'three';
 import { useMaterialMaps } from '../rendering/objects/materials';
+import { useCatalogMesh } from '../rendering/objects/catalog-mesh';
+
+// `parts()` takes a narrower shape than the scene actually holds; the full object is
+// what carries asset_ref and material_ref.
+type SceneLike = Parameters<typeof parts>[0];
+type SceneObjectLike = SceneLike['design']['objects'][number];
 
 // `material_ref` holds either a hex colour (what buildObject writes) or a catalog
 // material id (what CHANGE_MATERIAL writes). Only the latter has textures.
@@ -33,7 +39,7 @@ const DEFAULT_MATERIAL: Record<string, string> = {
   frame: 'mat_oak_light',
 };
 
-function materialFor(object: Parameters<typeof parts>[1]): string | null {
+function materialFor(object: SceneObjectLike): string | null {
   const ref = object.material_ref ?? '';
   if (MATERIAL_ID.test(ref)) return ref;
   // A hex that is not the default means someone asked for that colour. Painting a
@@ -50,8 +56,8 @@ function ObjectParts({
   opacity,
   depthWrite,
 }: {
-  scene: Parameters<typeof parts>[0];
-  object: Parameters<typeof parts>[1];
+  scene: SceneLike;
+  object: SceneObjectLike;
   emissive: string;
   transparent: boolean;
   opacity: number;
@@ -60,6 +66,18 @@ function ObjectParts({
   // Null whenever there is no material, it has no textures, or the server is
   // unreachable — falling back to exactly the flat colour drawn before.
   const maps = useMaterialMaps(materialFor(object));
+  const mesh = useCatalogMesh(object.asset_ref, object.dimensions as [number, number, number]);
+
+  // A catalog object draws its own mesh. Until it loads — or if it never does — the
+  // procedural boxes below stand in, so there is never an empty space.
+  if (mesh) {
+    return (
+      <group position={mesh.offset} scale={mesh.scale}>
+        <primitive object={mesh.scene} />
+      </group>
+    );
+  }
+
   return (
     <>
       {parts(scene, object).map((part) => (

@@ -6,6 +6,7 @@ import { File, Paths } from 'expo-file-system';
 import { sampleRoom } from '@reality/dev-scenarios';
 import { EditorPanel } from '../src/components/EditorPanel';
 import { createEditor, type Editor } from '../src/runtime/editor';
+import { loadObjectCatalog } from '../src/adapters/object-catalog';
 import {
   SpatialView,
   spatialSupported,
@@ -66,6 +67,9 @@ export default function Home() {
     keyframes.current = [];
   };
   useEffect(() => () => clearCaptures(), []);
+  // Primed once so the add path can look a catalog id up synchronously. An
+  // unreachable server leaves it empty and adds fall back to the families.
+  useEffect(() => { void loadObjectCatalog(); }, []);
   const handFrame = useRef<TrackedFrame | null>(null);
   const frame = useRef<TrackedFrame | null>(null),
     // Room-space origin in ARKit world coordinates. Subtracted from the camera and from

@@ -9,6 +9,7 @@ import {
   wallFacingYaw,
 } from '@reality/spatial-engine';
 import { buildObject, revalidate } from '@reality/scene-recipes';
+import { catalogEntry } from './object-catalog';
 import {
   RecipeSchema,
   SceneRecipeSchema,
@@ -98,6 +99,12 @@ export const IntentSchema = z
       .tuple([z.number().positive(), z.number().positive(), z.number().positive()])
       .optional(),
     family: z.enum(['bed', 'table', 'frame', 'shelf', 'cabinet']).optional(),
+    /**
+     * A pre-built object id from the catalog given in the context, used instead of
+     * `family` when one of them is what was asked for. Never invented: an id that is
+     * not in that list falls through to the family path.
+     */
+    catalog_id: z.string().max(80).optional(),
     count: z.number().int().min(1).max(12).optional(),
     legs: z.union([z.literal(3), z.literal(4)]).optional(),
     structure_kind: z.enum(['offset_wall', 'ceiling_height', 'resize_opening']).optional(),
@@ -242,6 +249,24 @@ export const VOICE_INSTRUCTIONS = [
   'action "group_edit" and the group id, so the same objects change rather',
   'than new ones appearing.',
 ].join('\n');
+/**
+ * Nearest authored template for a catalog category. Only five exist, so this is a
+ * deliberate approximation: it shapes the collision volume, not what is seen.
+ */
+const CATALOG_TEMPLATE: Record<string, 'bed' | 'table' | 'frame' | 'shelf' | 'cabinet'> = {
+  shelving_unit: 'shelf',
+  table: 'table', coffee_table: 'table', desk: 'table',
+  chair: 'table', office_chair: 'table', stool: 'table', bench: 'table',
+  bed: 'bed', sofa: 'bed', armchair: 'bed',
+  cabinet: 'cabinet', sideboard: 'cabinet', wardrobe: 'cabinet',
+  dresser: 'cabinet', nightstand: 'cabinet',
+  painting: 'frame', mirror: 'frame', television: 'frame', monitor: 'frame',
+};
+
+function templateFor(category: string): 'bed' | 'table' | 'frame' | 'shelf' | 'cabinet' {
+  return CATALOG_TEMPLATE[category] ?? 'cabinet';
+}
+
 export const voiceTool = {
   type: 'function',
   name: 'edit_room',
@@ -822,20 +847,27 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
     }
 
     if (command.action === 'add') {
-      if (!command.family) return rejected('Which kind of object should I add?');
+      // A catalog object keeps an authored template underneath: that assembly is what
+      // the solver collides against, and what is drawn if the mesh cannot be fetched.
+      const catalogued = catalogEntry(command.catalog_id);
+      const family = catalogued ? templateFor(catalogued.category) : command.family;
+      if (!family) return rejected('Which kind of object should I add?');
+      const catalogSize = catalogued?.dimensionsM;
       const dimensions: Vec3 =
         command.dimensions ??
-        (command.family === 'bed'
-          ? [1.5, 0.6, 2]
-          : command.family === 'frame'
-            ? [0.5, 0.6, 0.05]
-            : command.family === 'shelf'
-              ? [0.8, 0.06, 0.3]
-              : command.family === 'cabinet'
-                ? [0.8, 0.8, 0.5]
-                : [1, 0.75, 0.65]);
+        (catalogSize
+          ? [catalogSize.width, catalogSize.height, catalogSize.depth]
+          : family === 'bed'
+            ? [1.5, 0.6, 2]
+            : family === 'frame'
+              ? [0.5, 0.6, 0.05]
+              : family === 'shelf'
+                ? [0.8, 0.06, 0.3]
+                : family === 'cabinet'
+                  ? [0.8, 0.8, 0.5]
+                  : [1, 0.75, 0.65]);
       const recipe = RecipeSchema.parse({
-        family: command.family,
+        family,
         count: command.count ?? 1,
         dimensions,
         color: command.color ?? DEFAULT_COLOR,
@@ -912,6 +944,7 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
             wall?.id ?? floor.id,
           );
           built.object.pose.yaw = yaw;
+          if (catalogued) built.object.asset_ref = `catalog:${catalogued.id}`;
           additions.push({ type: 'add', ...built });
         }
         return additions;
@@ -925,7 +958,9 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
       // was already normal-sized, try 75% of it. The same solver and construction gates
       // run again, so "smaller" can never mean intersecting, floating, or structurally
       // invalid. Multi-object requests use the layout planner instead and remain atomic.
-      const normal = DEFAULT_DIMENSIONS[command.family] as Vec3;
+      // `family`, not `command.family`: a catalog object resolves its template from
+      // the entry's category, so the requested family may be absent entirely.
+      const normal = DEFAULT_DIMENSIONS[family] as Vec3;
       const normalIsSmaller = normal.some((value, axis) => value < dimensions[axis]! - 1e-6);
       const smaller = (normalIsSmaller
         ? normal.map((value, axis) => Math.min(value, dimensions[axis]!))
