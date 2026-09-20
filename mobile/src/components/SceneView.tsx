@@ -1,5 +1,5 @@
-import { useMemo, useRef, type MutableRefObject } from 'react';
-import { Canvas, useFrame, type ThreeEvent } from '@react-three/fiber/native';
+import { useEffect, useMemo, useRef, type MutableRefObject } from 'react';
+import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber/native';
 import { useCallback, useState } from 'react';
 import { Shape, Matrix4, Vector2 } from 'three';
 import { roomFromWorld } from '../adapters/room-space';
@@ -41,6 +41,63 @@ function CameraPose({
   return null;
 }
 
+/**
+ * Where the camera stands when the phone is not deciding.
+ *
+ * Spherical rather than a position, because it is dragged: two fingers move a bearing and
+ * an elevation, not an x and a y, and storing the result as a point would mean recovering
+ * those two angles from it on every frame.
+ *
+ * The defaults are exactly the old fixed `[4, 5, 6]` — 8.77m out, 34.8 degrees up, 33.7
+ * degrees round — so a room that is never dragged looks precisely as it always did.
+ */
+export type OrbitState = { azimuth: number; elevation: number; distance: number };
+
+export const restingOrbit = (): OrbitState => ({
+  azimuth: Math.atan2(4, 6),
+  elevation: Math.asin(5 / Math.sqrt(77)),
+  distance: Math.sqrt(77),
+});
+
+/** Under the floor and straight overhead are both useless; the second is also degenerate. */
+export const ORBIT_LIMITS = { minElevation: 0.08, maxElevation: 1.45, minDistance: 1.2, maxDistance: 40 };
+
+/**
+ * Puts the camera back on its tripod, and lets the tripod be moved.
+ *
+ * `CameraPose` does not merely move the camera — it overwrites the PROJECTION with
+ * ARKit's, straight from the frame. Stop feeding it and both are simply left wherever
+ * the phone last was, so detaching from the live view drops you at head height inside a
+ * wall, looking through a lens whose field of view belongs to a device you are no longer
+ * holding. Mounted whenever there is no frame, which is the development room as well.
+ *
+ * Reads the orbit through a ref and applies it per frame rather than on change: the
+ * gesture that drives it is a stream of touch events, and routing sixty of those a second
+ * through React state would re-render the whole editor to move a camera.
+ */
+function DeskCamera({ orbit }: { orbit?: MutableRefObject<OrbitState> }) {
+  const camera = useThree((state) => state.camera);
+  useEffect(() => {
+    // A perspective camera rebuilds its own projection from fov and aspect the moment
+    // it is asked; nothing else can undo the matrix that was written over it.
+    if ('isPerspectiveCamera' in camera && camera.isPerspectiveCamera) camera.updateProjectionMatrix();
+  }, [camera]);
+  useFrame(({ camera: live }) => {
+    const seat = orbit?.current ?? restingOrbit();
+    const flat = Math.cos(seat.elevation) * seat.distance;
+    live.position.set(
+      flat * Math.sin(seat.azimuth),
+      Math.sin(seat.elevation) * seat.distance,
+      flat * Math.cos(seat.azimuth),
+    );
+    // Slightly above the floor: furniture sits on it, so aiming at the plane itself puts
+    // half the room above the middle of the screen.
+    live.lookAt(0, 0.5, 0);
+    live.updateMatrixWorld(true);
+  });
+  return null;
+}
+
 function RenderDiagnostics({ onSample }: { onSample: (fps: number) => void }) {
   const sample = useRef({ frames: 0, started: 0 });
   useFrame(({ clock }) => {
@@ -62,6 +119,7 @@ export function SceneView({
   onPoint,
   onRelease,
   frame,
+  orbit,
   origin = [0, 0, 0],
   diagnostics = false,
   shell,
@@ -80,6 +138,9 @@ export function SceneView({
   onPoint: (point: Vec3, surfaceId: string) => void;
   onRelease: () => void;
   frame?: MutableRefObject<TrackedFrame | null>;
+  /** Where the camera stands when there is no frame driving it. Ignored in the live view,
+   * where ARKit owns the pose and a dragged one would fight it. */
+  orbit?: MutableRefObject<OrbitState>;
   origin?: Vec3;
   diagnostics?: boolean;
   /** The reconstructed empty-room shell, when one exists. Purely additive. */
@@ -144,6 +205,7 @@ export function SceneView({
       {/* The compositor drives the camera pose itself, from the same frame bundle as
           the pixels it draws, so the two must never both run. */}
       {frame && frameDiagnostic === 'off' && !compositing && <CameraPose frame={frame} origin={origin} />}
+      {!frame && <DeskCamera orbit={orbit} />}
       {compositing && erasure && (
         <CompositorView
           frameId={snapshot.scene.frameId}

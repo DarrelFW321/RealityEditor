@@ -29,6 +29,21 @@ public class SpatialCaptureModule: Module {
     AsyncFunction("invalidateTextureFrames") {
       self.activeView?.invalidateTextureFrames()
     }.runOnQueue(.main)
+    /**
+     Inks a floor plan onto a PDF page and returns its `file://` URL.
+
+     Deliberately takes a finished sheet rather than the room: RoomPlan has no floor-plan
+     export to call, and the drawing has to include furniture that only exists in the
+     editor's scene graph, so the page is laid out in TypeScript where that graph lives.
+     This side is Core Graphics and nothing else, which is why it needs no RoomPlan state
+     and works just as well on the development room.
+
+     Off the main queue on purpose. A page takes tens of milliseconds to draw and the AR
+     session is on the other side of that stall.
+     */
+    AsyncFunction("blueprintPDF") { (sheetJSON: String, fileName: String, title: String) -> String in
+      try BlueprintPDF.render(sheetJSON: sheetJSON, fileName: fileName, title: title).absoluteString
+    }
     OnDestroy {
       let textures = self.frameTextures
       DispatchQueue.main.async { textures.dispose() }

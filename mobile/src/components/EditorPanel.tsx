@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   AppState,
   Button,
+  Modal,
+  PanResponder,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -9,14 +13,15 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { SymbolView } from 'expo-symbols';
 import { AdapterSlot } from '@reality/adapters';
 import { bearingFor } from '@reality/spatial-engine';
 import type { EditorState, InteractionContext, Vec3 } from '@reality/contracts';
 import type { Editor, Intent } from '../runtime/editor';
 import type { TrackedFrame } from '../adapters/roomplan';
-import { RealtimeVoice } from '../adapters/realtime';
+import { RealtimeVoice, type VoiceActivity } from '../adapters/realtime';
 import { evaluateSpatialFrame } from '../adapters/roomplan';
-import { SceneView } from './SceneView';
+import { SceneView, restingOrbit, ORBIT_LIMITS } from './SceneView';
 import { resolveHand } from '../adapters/hand';
 import { InputCoordinator } from '../runtime/coordinator';
 import { applyToPoint, roomFromWorld } from '../adapters/room-space';
@@ -35,6 +40,11 @@ import { erasureVolumes, retainedVolumes } from '@reality/spatial-engine';
 import { PatchStore } from '../runtime/patches';
 import { frameCaptureAvailable, nativeFrameCapture } from '../adapters/frame-textures';
 import { apiURL } from '../runtime/api-url';
+import { BlueprintView } from './BlueprintView';
+import { BlueprintEditor } from './BlueprintEditor';
+import { blueprintAvailable, exportBlueprint, previewSheet } from '../adapters/blueprint';
+import type { PlanSheet } from '@reality/blueprint';
+import { GlassCircle, GlassCluster, GlassPanel, GlassPill } from './Glass';
 
 export function EditorPanel({
   editor,
@@ -43,6 +53,9 @@ export function EditorPanel({
   origin,
   spatialOwner,
   onSaveCapture,
+  onScan,
+  detached,
+  onDetach,
   reconstruction,
   depthInputs,
   onExit,
@@ -56,6 +69,11 @@ export function EditorPanel({
   /** Writes the capture this room came from out as an M4 gate fixture. Absent for the
    * development room, which was never captured. */
   onSaveCapture?: () => string;
+  /** Leaves this room and starts a measurement sweep. */
+  onScan?: () => void;
+  /** True while the room is being edited away from the room. */
+  detached?: boolean;
+  onDetach?: (next: boolean) => void;
   /** Empty-room reconstruction, which runs behind the editor after a capture. */
   reconstruction?: ReconstructionPhase;
   /** What the native side said about scene depth, or null before it has spoken. */
@@ -67,13 +85,21 @@ export function EditorPanel({
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [selected, setSelected] = useState<string | null>(null),
     [destination, setDestination] = useState<InteractionContext['destination']>(null);
-  const [message, setMessage] = useState('Select an object or point at a surface to add one.'),
-    [voice, setVoice] = useState(false),
-    [connecting, setConnecting] = useState(false);
+  const [message, setMessage] = useState('Starting the microphone\u2026');
+  // What the one button is doing, straight from the voice session. There is no separate
+  // "is voice on" flag: a second source of truth for the same thing is how a muted
+  // microphone ends up drawn as though it were listening.
+  const [activity, setActivity] = useState<VoiceActivity>('offline');
+  const [muted, setMuted] = useState(false);
   const [json, setJSON] = useState('{"action":"add","family":"table"}'),
     [dev, setDev] = useState(false);
   const [, refreshDiagnostics] = useState(0);
   const [sceneSize, setSceneSize] = useState<{ width: number; height: number } | null>(null);
+  // The sheet currently on screen. Non-null IS the modal being open: there is no second
+  // flag that could disagree with it about whether there is anything to show.
+  const [blueprint, setBlueprint] = useState<PlanSheet | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [blueprintNote, setBlueprintNote] = useState('');
   // The shell is a preview of the room without its furniture. Off by default: the
   // measured room is the working surface, and the shell is something you turn on to look
   // at rather than something that silently replaces what you were editing against.
@@ -194,10 +220,37 @@ export function EditorPanel({
   }, [erasure, frame, patches, compositorSample, depthInputs]);
   const [frameDiagnostic, setFrameDiagnostic] = useState<FrameDiagnosticMode>('off');
   const nativeFrameSample = useRef<FrameDiagnosticSample | null>(null);
-  /** M7.6.5: planning progress is its OWN indicator. A layout search takes long enough
-   * that reusing the per-edit latency line would read as one very slow edit. */
-  const [planning, setPlanning] = useState<string | null>(null);
   const [proposal, setProposal] = useState<string | null>(null);
+  /**
+   * The one line the interface still says out loud.
+   *
+   * Everything that used to be eight stacked Texts collapses to a headline and at most
+   * one aside, ranked by what a person needs first: what the solver just did, then why
+   * it could not, then whatever slow thing is happening behind the room.
+   */
+  const caption = snapshot.result?.message ?? message;
+  const aside =
+    snapshot.result?.conflicts[0] ??
+    (snapshot.phase === 'held' && snapshot.previewValidity && !snapshot.previewValidity.ok
+      ? snapshot.previewValidity.reason
+      : null) ??
+    patchNote ??
+    erasureStatus ??
+    // Unmeasured space must not read as measured space. It survived the cull because it
+    // is the one caption that is a claim about truth rather than about progress.
+    (snapshot.scene.provenance === 'inferred'
+      ? 'Some walls were not measured directly. Placements against them are estimates.'
+      : null);
+  /**
+   * Captions fade. A room you are standing in is the thing worth looking at, and a
+   * sentence that never leaves is a sentence nobody reads twice.
+   */
+  const [shown, setShown] = useState(true);
+  useEffect(() => {
+    setShown(true);
+    const timer = setTimeout(() => setShown(false), 7000);
+    return () => clearTimeout(timer);
+  }, [caption, aside]);
   const [gate, setGate] = useState<ScenarioResult[]>([]);
   const [gateRunning, setGateRunning] = useState<Scenario['milestone'] | null>(null);
   const [gateMilestone, setGateMilestone] = useState<Scenario['milestone'] | null>(null);
@@ -211,6 +264,14 @@ export function EditorPanel({
     // recent sample for a speech turn to bind against.
     const timer = setInterval(() => {
       input.current.sample();
+      /**
+       * A pending arrangement is not part of the engine snapshot, so nothing re-renders
+       * when one appears. It used to be mirrored by the touch restyle handler alone —
+       * which meant a restyle asked for BY VOICE put the transaction into
+       * awaiting_confirmation and then showed no way to confirm it. Read from the
+       * editor here, where both paths end up.
+       */
+      setProposal(editor.pendingProposal()?.explanation ?? null);
       // The SCP needs a viewpoint. Taken from the same tracked frame the renderer uses,
       // converted into room space once here rather than in the packet builder.
       const tracked = frame?.current;
@@ -292,8 +353,12 @@ export function EditorPanel({
         setFrameDiagnostic('off');
         editor.engine.setTracking(false);
         void slot.current.dispose();
-        setVoice(false);
+        setActivity('offline');
       } else {
+        // Voice came up on its own when the editor opened; it has to come back the same
+        // way. Backgrounding tears the session down, and without this the one button
+        // returns dead and the app looks like it stopped listening on purpose.
+        if (!slot.current.active) void connect();
         // Resume from what the AR session actually reports, not from the absence of a
         // frame ref. `!frame` is false for every real session, so editing stayed dead
         // after any backgrounding until the panel remounted. With no tracked frame at
@@ -399,30 +464,6 @@ export function EditorPanel({
       setGateRunning(null);
     }
   }
-  /**
-   * The touch half of M7.3.7: the same coordinator, the same planner and the same
-   * transaction the voice tool uses. Not a parallel implementation — if this drifted
-   * from the voice path, "available to touch and voice" would stop being true.
-   */
-  async function runRestyle(recipe: unknown) {
-    setPlanning('Planning the layout…');
-    try {
-      const result = await input.current.restyle(recipe, { source: 'touch' }, (stage) =>
-        setPlanning(stage === 'planning' ? 'Planning the layout…' : null),
-      );
-      setMessage([result.message, ...result.conflicts].join(' '));
-      setProposal(
-        result.refusal === 'awaiting_confirmation'
-          ? (editor.pendingProposal()?.explanation ?? 'Apply this arrangement?')
-          : null,
-      );
-    } catch {
-      setMessage('That arrangement could not be planned.');
-    } finally {
-      setPlanning(null);
-    }
-  }
-
   async function run(intent: Intent | unknown) {
     try {
       const result = await editor.intent(intent, context.current);
@@ -431,30 +472,247 @@ export function EditorPanel({
       setMessage('That edit could not be applied.');
     }
   }
-  async function toggleVoice() {
-    if (connecting) return;
-    if (voice) {
-      await slot.current.dispose();
-      setVoice(false);
+  /**
+   * Bring the microphone up.
+   *
+   * Called once on entry rather than waiting to be asked. The room is edited by talking
+   * to it; a voice-first app whose first required act is finding the button that turns
+   * voice on has the wrong first act. A failure here is reported and left alone — touch
+   * still selects and carries, and retrying on a loop would hammer a server that has
+   * already said no.
+   */
+  const connect = async () => {
+    setActivity('connecting');
+    try {
+      await slot.current.replace(
+        () => new RealtimeVoice(apiURL(), editor.diagnostics, input.current, setMessage, setActivity),
+      );
+      slot.current.active?.setMuted(muted);
+    } catch (error) {
+      setActivity('offline');
+      setMessage(error instanceof Error ? error.message : 'Voice unavailable.');
+    }
+  };
+  /**
+   * The one button.
+   *
+   * Mute is not disconnect: the session, its tools and the conversation so far all
+   * survive, and only the audio track is disabled. Pressing it while offline is read as
+   * "start" instead, so a connection that failed has a way back without a second control
+   * that would exist purely to say the first one is broken.
+   */
+  function toggleMute() {
+    const voice = slot.current.active;
+    if (!voice || activity === 'offline') {
+      if (activity !== 'connecting') void connect();
       return;
     }
-    setConnecting(true);
-    try {
-      await slot.current.replace(() => {
-        return new RealtimeVoice(
-          apiURL(),
-          editor.diagnostics,
-          input.current,
-          setMessage,
-        );
-      });
-      setVoice(true);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Voice unavailable.');
-    } finally {
-      setConnecting(false);
-    }
+    const next = !muted;
+    setMuted(next);
+    voice.setMuted(next);
   }
+  // Voice comes up with the editor. Deliberately not awaited: the room is usable the
+  // moment it is measured, and it must not wait on a network round trip to become so.
+  useEffect(() => {
+    void connect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  /**
+   * What "export a blueprint" and "end the session" do when spoken.
+   *
+   * The two buttons left and the two spoken forms land in the same place, so neither can
+   * drift from the other. Registered against the editor rather than handled inside it
+   * because neither one touches the room.
+   */
+  useEffect(
+    () =>
+      editor.onAppAction((action) => {
+        if (action === 'export_blueprint') openBlueprint();
+        else confirmExit();
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [editor],
+  );
+  /**
+   * The plan of the room as it is, rebuilt whenever the room changes.
+   *
+   * Only while the development sheet is open. `buildPlan` is cheap but it is not free,
+   * and a page nobody is looking at is a page worth not drawing on every committed edit.
+   */
+  const devPlan = useMemo(
+    () => (dev ? previewSheet(snapshot.scene) : null),
+    [dev, snapshot.scene],
+  );
+  /**
+   * A shape dragged on the plan, turned into a request to move the object.
+   *
+   * Relative, not absolute: the drag knows how far the finger went, and only the scene
+   * knows where the object started. `pose.position` names different corners of the box
+   * for different pivots, so adding a delta is exact where reading a centroid off the
+   * drawing would quietly shift anything pivoted on its back edge.
+   *
+   * It goes through `point` and `run` — the same destination and the same intent a tap
+   * in the 3D view produces — so the solver validates this exactly as it validates
+   * everything else, and can adjust it, hold it for a yes, or refuse it.
+   */
+  async function movePlan(id: string, delta: [number, number]) {
+    const scene = editor.engine.getSnapshot().scene;
+    const object = scene.design.objects.find((o) => o.id === id);
+    const floor = scene.design.surfaces.find((s) => s.class === 'floor' && s.state === 'present');
+    if (!object || !floor) {
+      setMessage('That shape is not something the plan can move.');
+      return;
+    }
+    point(
+      [
+        (object.pose.position[0] ?? 0) + delta[0],
+        object.pose.position[1] ?? 0,
+        (object.pose.position[2] ?? 0) + delta[1],
+      ],
+      floor.id,
+    );
+    await run({ action: 'move', target_id: id });
+  }
+  function openBlueprint() {
+    setBlueprintNote('');
+    setBlueprint(
+      previewSheet(editor.engine.getSnapshot().scene, {
+        title:
+          editor.engine.getSnapshot().scene.provenance === 'sample'
+            ? 'DEVELOPMENT ROOM'
+            : 'FLOOR PLAN',
+      }),
+    );
+  }
+  function confirmExit() {
+    Alert.alert('End session?', 'The room and everything in it will be discarded.', [
+      { text: 'Keep editing', style: 'cancel' },
+      { text: 'End session', style: 'destructive', onPress: onExit },
+    ]);
+  }
+  /**
+   * Swipe down from the top to leave.
+   *
+   * On the ROOT, in the CAPTURE phase, rather than on an invisible strip laid over the
+   * scene. An overlay would have been simpler and wrong: React Native hit-tests to the
+   * topmost view and then negotiates UPWARDS, so a sibling underneath never gets a
+   * second chance — the strip would have silently eaten every tap on an object in the
+   * top of the view, which is most of the room when you are standing in it. Capturing
+   * from the ancestor leaves the scene as the responder for everything else and takes
+   * over only once the gesture has proved to be this one.
+   *
+   * Never while carrying. Dragging an object downhill from the top of the screen is a
+   * real thing to be doing, and it must not be read as wanting to throw the room away.
+   *
+   * Both values are read through refs because the responder is built once: closing over
+   * the first render's snapshot would ask whether the object was held a minute ago.
+   */
+  /**
+   * Two fingers move the camera; one finger moves the furniture.
+   *
+   * The split is what makes both possible at once. A single finger already means select,
+   * point and carry, so the view had to claim a gesture that could never be one of those
+   * — and it claims it in the CAPTURE phase on the scene's own container, so a one-finger
+   * touch is never intercepted on its way to the object underneath.
+   *
+   * Only where the phone is not already the camera. In the live view ARKit owns the pose
+   * and a dragged one would be overwritten sixty times a second while fighting it.
+   */
+  const orbit = useRef(restingOrbit());
+  const orbitable = useRef(false);
+  orbitable.current = !frame;
+  const grip = useRef({ x: 0, y: 0, spread: 0, live: false });
+  const reading = (touches: readonly { pageX: number; pageY: number }[]) => {
+    const a = touches[0]!;
+    const b = touches[1]!;
+    return {
+      x: (a.pageX + b.pageX) / 2,
+      y: (a.pageY + b.pageY) / 2,
+      spread: Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY),
+    };
+  };
+  const clamp = (value: number, low: number, high: number) =>
+    value < low ? low : value > high ? high : value;
+  const look = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponderCapture: (event) =>
+        orbitable.current && event.nativeEvent.touches.length >= 2,
+      onMoveShouldSetPanResponderCapture: (event) =>
+        orbitable.current && event.nativeEvent.touches.length >= 2,
+      // Never hand the gesture back mid-orbit: the canvas below would otherwise take it
+      // the moment one finger drifts, and the room would jump as a carry began.
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: (event) => {
+        if (event.nativeEvent.touches.length < 2) return;
+        grip.current = { ...reading(event.nativeEvent.touches), live: true };
+      },
+      onPanResponderMove: (event) => {
+        const touches = event.nativeEvent.touches;
+        // A finger lifted and came back. Re-seat rather than applying the jump between
+        // a two-finger centroid and a one-finger one, which is half the screen.
+        if (touches.length < 2) {
+          grip.current.live = false;
+          return;
+        }
+        const now = reading(touches);
+        if (!grip.current.live) {
+          grip.current = { ...now, live: true };
+          return;
+        }
+        const seat = orbit.current;
+        /**
+         * Slower than a mouse, because two fingers have less room than a mouse.
+         *
+         * A swipe across the screen turns about 130 degrees and tilts through maybe half
+         * the usable range. Desktop orbit controls map a screen height to a full circle;
+         * at that rate a thumb-and-finger drag spins the room twice and you lose which
+         * wall you were looking at.
+         */
+        seat.azimuth -= (now.x - grip.current.x) * 0.006;
+        // Drag down and the room tips towards you, showing more of its top.
+        seat.elevation = clamp(
+          seat.elevation + (now.y - grip.current.y) * 0.003,
+          ORBIT_LIMITS.minElevation,
+          ORBIT_LIMITS.maxElevation,
+        );
+        if (grip.current.spread > 12 && now.spread > 12)
+          seat.distance = clamp(
+            seat.distance * (grip.current.spread / now.spread),
+            ORBIT_LIMITS.minDistance,
+            ORBIT_LIMITS.maxDistance,
+          );
+        grip.current = { ...now, live: true };
+      },
+      onPanResponderRelease: () => {
+        grip.current.live = false;
+      },
+      onPanResponderTerminate: () => {
+        grip.current.live = false;
+      },
+    }),
+  ).current;
+
+  const held = useRef(snapshot.phase);
+  held.current = snapshot.phase;
+  const exit = useRef(() => {});
+  exit.current = confirmExit;
+  const dismiss = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponderCapture: () => false,
+      onMoveShouldSetPanResponderCapture: (event, gesture) =>
+        // One finger. Two is the camera, and a two-finger drag downwards from the top of
+        // the screen is an ordinary way to look at the ceiling, not a request to throw
+        // the room away.
+        event.nativeEvent.touches.length === 1 &&
+        held.current !== 'held' &&
+        gesture.y0 < 110 &&
+        gesture.dy > 40 &&
+        Math.abs(gesture.dy) > Math.abs(gesture.dx) * 2,
+      onPanResponderRelease: (_event, gesture) => {
+        if (gesture.dy > 90) exit.current();
+      },
+    }),
+  ).current;
   function point(position: Vec3, surfaceId: string, kind: 'surface' | 'object' = 'surface') {
     const next = { position, surfaceId, kind };
     // Through the coordinator, which notifies the mirror above. Pointing at a
@@ -468,17 +726,18 @@ export function EditorPanel({
     if (editor.engine.getSnapshot().phase === 'held' && context.current.destination)
       void editor.engine.release(editor.nextId(), context.current.destination.surfaceId);
   }
-  const object = snapshot.scene.design.objects.find((o) => o.id === selected);
   return (
-    <View style={styles.root}>
+    <View style={styles.root} {...dismiss.panHandlers}>
       <View
         style={styles.scene}
         onLayout={(event) => {
           const { width, height } = event.nativeEvent.layout;
           setSceneSize({ width, height });
         }}
+        {...look.panHandlers}
       >
         <SceneView
+          orbit={orbit}
           snapshot={snapshot}
           selectedId={selected}
           onSelect={(id) => input.current.select(id, 'touch')}
@@ -515,235 +774,126 @@ export function EditorPanel({
           }}
         />
       )}
-      <View style={styles.top}>
-        <Text style={styles.title}>
-          {snapshot.scene.provenance === 'sample' ? 'Development room' : 'Your space'}
-        </Text>
-        <Pressable onPress={onExit}>
-          <Text style={styles.link}>End session</Text>
-        </Pressable>
-      </View>
-      <View style={styles.panel}>
-        <Text style={styles.text}>{snapshot.result?.message ?? message}</Text>
-        <Text style={styles.detail}>{message}</Text>
-        {/* Drop validity while held. The PRD requires this to be visible during the
-            carry and equally requires it not to block one, so it is only ever text. */}
-        {snapshot.phase === 'held' && snapshot.previewValidity && (
-          <Text style={snapshot.previewValidity.ok ? styles.good : styles.error}>
-            {snapshot.previewValidity.ok
-              ? 'Clear to release here.'
-              : snapshot.previewValidity.reason}
-          </Text>
+      {/* WHAT IS LEFT OF THE INTERFACE.
+          The room is the interface; this is the little that cannot be said out loud.
+          `box-none` so every tap that is not on a control still reaches the scene, which
+          is how an object gets selected now that selecting one shows no buttons. */}
+      <View style={styles.hud} pointerEvents="box-none">
+        {shown && caption !== '' && (
+          <GlassPanel style={styles.caption}>
+            <Text style={styles.captionText}>{caption}</Text>
+            {aside !== null && <Text style={styles.captionAside}>{aside}</Text>}
+          </GlassPanel>
         )}
-        {snapshot.result?.conflicts.map((error, i) => (
-          <Text key={`conflict-${i}`} style={styles.error}>
-            {error}
-          </Text>
-        ))}
-        {snapshot.result?.report?.remaining_notes.map((note, i) => (
-          <Text key={`note-${i}`} style={styles.detail}>
-            {note.type} on the {note.side}: {Math.round(note.value_m * 100)}cm, {Math.round(note.recommended_m * 100)}cm recommended
-          </Text>
-        ))}
-        {snapshot.result?.caveats.map((caveat, i) => (
-          <Text key={`caveat-${i}`} style={styles.detail}>
-            {caveat}
-          </Text>
-        ))}
-        {erasureStatus && <Text style={styles.detail}>{erasureStatus}</Text>}
-        {patchNote && <Text style={styles.detail}>{patchNote}</Text>}
-        {planning && <Text style={styles.detail}>{planning}</Text>}
-        {proposal && (
-          <View style={styles.row}>
-            <Button
-              title="Apply it"
-              onPress={() => {
-                setProposal(null);
-                void input.current.confirm().then((r) => setMessage(r.message));
-              }}
-            />
-            <Button
-              title="Leave it"
-              onPress={() => {
-                setProposal(null);
-                void run({ action: 'cancel' });
-              }}
-            />
-          </View>
-        )}
-        {snapshot.pending && (
-          <View style={styles.row}>
-            <Button
-              title="Move it there"
-              onPress={() => void editor.engine.confirm(snapshot.pending!.operationId)}
-            />
-            <Button title="Leave it" onPress={() => editor.engine.cancel()} />
-          </View>
-        )}
-        {!snapshot.pending &&
-          snapshot.result?.report?.alternatives.map((alternative, i) => (
-            <Text key={`alt-${i}`} style={styles.detail}>
-              Could go {alternative.summary}
+        {/* A QUESTION, NOT A CONTROL. The solver holds an adjustment of 5cm or more for
+            a yes, and "yes" is a thing you say — but a held operation with no visible
+            way to answer it is a dead end whenever voice is muted or never connected.
+            It shows only while something is actually waiting. */}
+        {(proposal !== null || snapshot.pending !== null) && (
+          <GlassPanel style={styles.caption}>
+            <Text style={styles.captionText}>
+              {proposal ?? snapshot.pending?.report?.adjustment_reason ?? 'Apply that adjustment?'}
             </Text>
-          ))}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.row}
-        >
-          {(['bed', 'table', 'frame', 'shelf', 'cabinet'] as const).map((family) => (
-            <Pressable
-              key={family}
-              style={styles.chip}
-              onPress={() => void run({ action: 'add', family })}
+            <View style={styles.answers}>
+              {/* One handler for both kinds of waiting. The coordinator checks a parked
+                  arrangement first and falls through to the engine's held operation, so
+                  the button cannot answer the wrong question. Neither branch clears the
+                  prompt optimistically: it is read from the editor, and blanking it here
+                  would only make it flicker back on the next poll. */}
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void input.current.confirm().then((r) => setMessage(r.message))}
+              >
+                <Text style={styles.answer}>Yes</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void run({ action: 'cancel' })}
+              >
+                <Text style={styles.answerDim}>No</Text>
+              </Pressable>
+            </View>
+          </GlassPanel>
+        )}
+        <GlassCluster style={styles.cluster} spacing={28}>
+          <GlassCircle
+            size={78}
+            accessibilityLabel={muted ? 'Unmute the microphone' : 'Mute the microphone'}
+            tintColor={activity === 'hearing' ? 'rgba(90,190,255,0.28)' : undefined}
+            onPress={() => toggleMute()}
+            // The diagnostics, the gates and the JSON console still exist; they just no
+            // longer occupy the screen of someone using the app.
+            onLongPress={__DEV__ ? () => setDev(!dev) : undefined}
+          >
+            <VoiceIcon activity={activity} />
+          </GlassCircle>
+          <GlassCircle
+            size={62}
+            accessibilityLabel="Export a blueprint of this room"
+            onPress={openBlueprint}
+          >
+            <SymbolView name="ruler" size={25} tintColor="#e8f0fb" />
+          </GlassCircle>
+          {/* TAKE THE MEASURED ROOM SOMEWHERE ELSE.
+              A scan is finished standing in the room and thought about on a sofa, where
+              the live view shows furniture registered to walls that are not in front of
+              you. This swaps the camera for the three-quarter view and the plan — the
+              development room, holding your room. Never offered for the sample room,
+              which has no camera to leave. */}
+          {onDetach && snapshot.scene.provenance !== 'sample' && (
+            <GlassCircle
+              size={62}
+              accessibilityLabel={
+                detached ? 'Return to the live view' : 'Edit this room away from the room'
+              }
+              onPress={() => {
+                onDetach(!detached);
+                setMessage(
+                  detached
+                    ? 'Back in the room. Point at things again.'
+                    : 'Two fingers to look around, one to move things. Long-press the microphone for the drawing.',
+                );
+              }}
             >
-              <Text style={styles.text}>+ {family}</Text>
-            </Pressable>
-          ))}
-          <Pressable
-            style={styles.chip}
-            onPress={() => void run({ action: 'mask_area' })}
-          >
-            <Text style={styles.text}>◻ mask area</Text>
-          </Pressable>
-          {snapshot.scene.maskVolumes.length > 0 && (
-            <Pressable style={styles.chip} onPress={() => void run({ action: 'unmask_area' })}>
-              <Text style={styles.text}>✕ unmask</Text>
-            </Pressable>
+              <SymbolView
+                name={detached ? 'arkit' : 'cube.transparent'}
+                size={25}
+                tintColor="#e8f0fb"
+              />
+            </GlassCircle>
           )}
-          <Pressable
-            style={styles.chip}
-            disabled={planning !== null}
-            onPress={() =>
-              void runRestyle({
-                label: 'a blue bedroom with three frames',
-                items: [
-                  { family: 'bed', count: 1, color: '#3b6ea5' },
-                  {
-                    family: 'frame',
-                    count: 3,
-                    color: '#2f2f33',
-                    ...(destination?.surfaceId ? { surface_id: destination.surfaceId } : {}),
-                  },
-                ],
-                wall_color: '#5b7fa8',
-              })
-            }
-          >
-            <Text style={styles.text}>✦ blue bedroom</Text>
-          </Pressable>
-        </ScrollView>
-        {object && (
-          <>
-            <Text style={styles.detail}>
-              Selected: {object.refined_class ?? object.class} ·{' '}
-              {object.dimensions.map((n) => n.toFixed(2)).join(' × ')} m
-            </Text>
-            <ScrollView horizontal contentContainerStyle={styles.row}>
-              <Button
-                title={snapshot.phase === 'held' ? 'Release' : 'Carry'}
-                onPress={() =>
-                  snapshot.phase === 'held' ? release() : editor.engine.begin(object.id)
-                }
-              />
-              <Button title="Cancel" onPress={() => editor.engine.cancel()} />
-              <Button
-                title="Rotate 15°"
-                onPress={() =>
-                  void run({
-                    action: 'rotate',
-                    yaw_degrees: (object.pose.yaw * 180) / Math.PI + 15,
-                  })
-                }
-              />
-              <Button
-                title="Wider"
-                onPress={() =>
-                  void run({
-                    action: 'resize',
-                    dimensions: [
-                      object.dimensions[0]! * 1.1,
-                      object.dimensions[1]!,
-                      object.dimensions[2]!,
-                    ],
-                  })
-                }
-              />
-              <Button
-                title="Blue"
-                onPress={() => void run({ action: 'color', color: '#397fc7' })}
-              />
-              <Button title="Remove" onPress={() => void run({ action: 'remove' })} />
-            </ScrollView>
-          </>
-        )}
-        <View style={styles.row}>
-          <Button title="Undo" onPress={() => void run({ action: 'undo' })} />
-          <Button
-            title={connecting ? 'Connecting…' : voice ? 'Stop voice' : 'Start voice'}
-            disabled={connecting}
-            onPress={() => void toggleVoice()}
-          />
-          {__DEV__ && <Button title="Modules" onPress={() => setDev(!dev)} />}
-        </View>
-        {/* Unknown space must not read as verified space. A shell with inferred structure
-            says so here rather than letting the room imply it was all measured. */}
-        {snapshot.scene.provenance === 'inferred' && (
-          <Text style={styles.detail}>
-            Partly inferred:{' '}
-            {snapshot.scene.design.surfaces
-              .filter((s) => s.provenance === 'inferred' && s.state === 'present')
-              .map((s) => s.class)
-              .join(', ')}{' '}
-            were not measured directly. Placements against them are estimates.
-          </Text>
-        )}
-        {/* Reconstruction is asynchronous and optional — the measured room works without
-            it — but it must never fail silently. */}
-        {reconstruction && reconstruction.state !== 'idle' && (
-          <Text
-            style={
-              reconstruction.state === 'failed'
-                ? styles.error
-                : reconstruction.state === 'ready'
-                  ? styles.good
-                  : styles.detail
-            }
-          >
-            {reconstruction.state === 'uploading'
-              ? `Sending ${reconstruction.done}/${reconstruction.total} views for the empty-room preview…`
-              : reconstruction.state === 'reconstructing'
-                ? `Building the empty-room preview — ${reconstruction.stage}…`
-                : reconstruction.state === 'ready'
-                  ? `Empty-room preview ready — ${reconstruction.shell.surfaces.length} surfaces, filled by ${reconstruction.shell.completion}.`
-                  : reconstruction.state === 'unavailable'
-                    ? reconstruction.reason
-                    : `Empty-room preview failed: ${reconstruction.reason}. The measured room is unaffected.`}
-          </Text>
-        )}
-        {reconstruction?.state === 'ready' && (
-          <View style={styles.row}>
-            <Button
-              title={showShell ? 'Hide empty room' : 'Show empty room'}
-              onPress={() => setShowShell(!showShell)}
-            />
-            {showShell && (
-              <Text style={styles.detail}>
-                {reconstruction.shell.surfaces.filter((s) => s.inferred).length} of{' '}
-                {reconstruction.shell.surfaces.length} surfaces are mostly inferred and are
-                dimmed. Real furniture is still in the camera; only the shell is clean.
-              </Text>
-            )}
-          </View>
-        )}
-        {snapshot.scene.removedPhysicalIds.length > 0 && (
-          <Text style={styles.detail}>
-            Design preview: {snapshot.scene.removedPhysicalIds.length} physical objects require
-            moving or removal. Camera pixels are not erased.
-          </Text>
-        )}
+          {/* THE WAY OUT OF THE DEVELOPMENT ROOM, BY TAP.
+              Only there. Swiping down returns to the welcome screen, which is a gesture
+              you have to know about, and from the sample room the thing you almost
+              always want next is to measure a real one — so this does both at once.
+              Deliberately absent from a real session: it discards the room, and a
+              button that throws away a scan does not belong next to one that saves it. */}
+          {onScan && snapshot.scene.provenance === 'sample' && (
+            <GlassCircle
+              size={62}
+              accessibilityLabel="Leave the development room and scan a real one"
+              onPress={onScan}
+            >
+              <SymbolView name="viewfinder" size={25} tintColor="#e8f0fb" />
+            </GlassCircle>
+          )}
+        </GlassCluster>
+      </View>
         {__DEV__ && dev && (
-          <View style={styles.dev}>
+          <View style={styles.devSheet}>
+            {/* THE PLAN, LIVE. Open the development sheet and the room is also a
+                drawing — one that can be touched. */}
+            {devPlan && (
+              <View style={styles.devPlan}>
+                <BlueprintEditor
+                  sheet={devPlan}
+                  selectedId={selected}
+                  onSelect={(id) => input.current.select(id, 'touch')}
+                  onMove={(id, delta) => void movePlan(id, delta)}
+                />
+              </View>
+            )}
+            <ScrollView contentContainerStyle={styles.dev}>
             {(() => {
               const report = evaluateSpatialFrame(frame?.current ?? null, sceneSize);
               const nativeHand = handFrame?.current?.hand;
@@ -941,12 +1091,104 @@ export function EditorPanel({
                 {e.stage} / {e.code} / r{e.revision ?? '-'}
               </Text>
             ))}
+            </ScrollView>
           </View>
         )}
-      </View>
+      <Modal
+        visible={blueprint !== null}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setBlueprint(null)}
+      >
+        <View style={styles.sheetRoot}>
+          <View style={styles.top}>
+            <Text style={styles.title}>Blueprint</Text>
+            <Pressable onPress={() => setBlueprint(null)}>
+              <Text style={styles.link}>Close</Text>
+            </Pressable>
+          </View>
+          {blueprint && (
+            <>
+              {/* Fixed to the page's own aspect ratio. A preview that reflows is a
+                  preview of a different drawing. */}
+              <View style={styles.page}>
+                <BlueprintView sheet={blueprint} style={StyleSheet.absoluteFill} />
+              </View>
+              <Text style={styles.detail}>
+                A4 landscape at {blueprint.scaleLabel}. Drawn from the room as it is now,
+                including everything added in this session.
+              </Text>
+              {blueprintNote !== '' && <Text style={styles.detail}>{blueprintNote}</Text>}
+              {!blueprintAvailable() ? (
+                <Text style={styles.error}>
+                  This development build cannot write a PDF. The preview above is the whole
+                  drawing; rebuild the app to export it.
+                </Text>
+              ) : exporting ? (
+                <View style={styles.row}>
+                  <ActivityIndicator color="#9dccff" />
+                  <Text style={styles.detail}>Drawing the page…</Text>
+                </View>
+              ) : (
+                <GlassPill
+                  label="Export PDF"
+                  onPress={() => {
+                    setExporting(true);
+                    setBlueprintNote('');
+                    // The sheet on screen, not a fresh one: what was previewed is what
+                    // gets exported even if a voice command moved something meanwhile.
+                    void exportBlueprint(blueprint, {
+                      title: snapshot.scene.provenance === 'sample' ? 'DEVELOPMENT ROOM' : 'FLOOR PLAN',
+                    })
+                      .then((result) =>
+                        setBlueprintNote(
+                          result.shared ? 'Shared.' : 'Saved to the app\u2019s cache and offered for sharing.',
+                        ),
+                      )
+                      .catch((error: unknown) =>
+                        setBlueprintNote(
+                          error instanceof Error ? error.message : 'The blueprint could not be exported.',
+                        ),
+                      )
+                      .finally(() => setExporting(false));
+                  }}
+                />
+              )}
+            </>
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }
+/**
+ * The microphone, showing what it is doing.
+ *
+ * Four states a person can act on, and one that is only ever briefly true. `waveform`
+ * is a layered symbol, so the variable-colour animation runs through its bars — which is
+ * what makes "it can hear me" visible at arm's length rather than a colour change nobody
+ * notices. A muted microphone is never animated: it has nothing to show.
+ */
+function VoiceIcon({ activity }: { activity: VoiceActivity }) {
+  if (activity === 'connecting') return <ActivityIndicator color="#e8f0fb" />;
+  if (activity === 'muted')
+    return <SymbolView name="mic.slash.fill" size={27} tintColor="#ff9d8c" />;
+  if (activity === 'offline') return <SymbolView name="mic.fill" size={27} tintColor="#8598ad" />;
+  if (activity === 'listening')
+    return <SymbolView name="mic.fill" size={27} tintColor="#e8f0fb" />;
+  return (
+    <SymbolView
+      name="waveform"
+      size={28}
+      tintColor={activity === 'hearing' ? '#6fd0ff' : '#b9d4ec'}
+      animationSpec={{
+        repeating: true,
+        variableAnimationSpec: { iterative: true, dimInactiveLayers: true },
+      }}
+    />
+  );
+}
+
 /** A destination on another object is only offered when that object can carry it.
  * Goes through `bearingFor` so a scanned desk is offered on the same terms as one the
  * user added; checking `assemblies` directly excluded every measured object. */
@@ -970,14 +1212,42 @@ const styles = StyleSheet.create({
   top: { padding: 20, flexDirection: 'row', justifyContent: 'space-between' },
   title: { color: 'white', fontWeight: '600', fontSize: 22 },
   link: { color: '#9dccff' },
-  panel: { marginTop: 'auto', padding: 16, gap: 8, backgroundColor: '#0f1b2bea' },
-  text: { color: '#f3f5f8', fontSize: 15 },
-  detail: { color: '#9dadbf', fontSize: 12 },
-  error: { color: '#ffad99', fontSize: 12 },
+  hud: { marginTop: 'auto', alignItems: 'center', paddingBottom: 34, gap: 14 },
+  caption: {
+    maxWidth: 340,
+    marginHorizontal: 20,
+    paddingHorizontal: 18,
+    paddingVertical: 13,
+    borderRadius: 22,
+    overflow: 'hidden',
+    gap: 6,
+  },
+  captionText: { color: '#ffffff', fontSize: 16, lineHeight: 22, textAlign: 'center', fontWeight: '500' },
+  captionAside: { color: '#cfe0f1', fontSize: 13, lineHeight: 18, textAlign: 'center' },
+  answers: { flexDirection: 'row', justifyContent: 'center', gap: 28, paddingTop: 4 },
+  answer: { color: '#9ed6ff', fontSize: 17, fontWeight: '700' },
+  answerDim: { color: '#c3d2e2', fontSize: 17, fontWeight: '500' },
+  cluster: { alignItems: 'center', gap: 14 },
+  devSheet: {
+    position: 'absolute',
+    top: 60,
+    bottom: 130,
+    left: 12,
+    right: 12,
+    backgroundColor: '#0b1422f2',
+    borderRadius: 18,
+    overflow: 'hidden',
+  },
+  devPlan: { padding: 10, paddingBottom: 4 },
+  text: { color: '#f6fafe', fontSize: 15 },
+  detail: { color: '#c6d6e6', fontSize: 13 },
+  error: { color: '#ffb7a6', fontSize: 13 },
   good: { color: '#6de0ad' },
   row: { flexDirection: 'row', gap: 8 },
   chip: { borderWidth: 1, borderColor: '#3b516d', borderRadius: 18, padding: 10 },
   dev: { gap: 8 },
+  sheetRoot: { flex: 1, backgroundColor: '#0c1420', padding: 16, gap: 12 },
+  page: { aspectRatio: 842 / 595, backgroundColor: '#ffffff', borderRadius: 4, overflow: 'hidden' },
   input: {
     color: 'white',
     borderColor: '#506784',

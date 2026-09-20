@@ -51,6 +51,12 @@ export const IntentSchema = z
       // Draw an erasure box by hand, for anything the scan never recognised.
       'mask_area',
       'unmask_area',
+      // APP actions, not scene edits. They mutate nothing, advance no revision and have
+      // no inverse; they exist so the two things the interface still has buttons for are
+      // also reachable by speech, which is the same parity rule `select` and `cancel`
+      // were added under.
+      'export_blueprint',
+      'end_session',
     ])
       .describe(
         [
@@ -225,6 +231,10 @@ export const VOICE_INSTRUCTIONS = [
   'tool returned a refusal. Say which of the two it is. Do not describe',
   'anything you were not told by a tool result.',
   '',
+  'Two requests are about the APP, not the room: "export a blueprint" or',
+  '"show me the floor plan" is action "export_blueprint", and "end the',
+  'session" or "I am done" is action "end_session". Neither takes a target.',
+  '',
   'Use supplied interaction_context and spatial_context; never guess',
   'coordinates or targets. Report the tool result faithfully, including any',
   'adjustment or caveat. Unknown structural support means it is not',
@@ -362,7 +372,19 @@ export const defaultEditorModules: EditorModules = {
   buildObject,
 };
 
+/** Something the app does, as opposed to something the room does. */
+export type AppAction = 'export_blueprint' | 'end_session';
+
 export function createEditor(scene: EditorState, modules: EditorModules = defaultEditorModules) {
+  /**
+   * Where `export_blueprint` and `end_session` go.
+   *
+   * Deliberately NOT routed through the engine. An app action changes no geometry, so
+   * giving it a transaction, a revision bump and an inverse would put something in the
+   * op log that undo would then try to reverse. The editor only forwards it; the screen
+   * that owns the modal and the session decides what it means.
+   */
+  let appAction: ((action: AppAction) => void) | null = null;
   const diagnostics = new Diagnostics();
   const attention = new AttentionHistory();
   const settling = modules.createSettling();
@@ -522,7 +544,32 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
     if (context.frameId !== state.frameId || context.revision !== state.revision)
       return rejected('The room changed since that instruction. Please repeat it.', 'stale_revision');
 
+    if (command.action === 'export_blueprint' || command.action === 'end_session') {
+      const handled = appAction !== null;
+      appAction?.(command.action);
+      return {
+        // Reported honestly: with nothing listening the request did not happen, and
+        // saying "done" would have the model tell the user a sheet is on screen when
+        // there is no screen listening for one.
+        status: handled ? 'applied' : 'rejected',
+        message: handled
+          ? command.action === 'end_session'
+            ? 'Ending the session.'
+            : 'Here is the blueprint.'
+          : 'That is not available here.',
+        report: null,
+        refusal: handled ? null : 'invalid_parameters',
+        caveats: [],
+        conflicts: [],
+        revision: engine.getSnapshot().scene.revision,
+      };
+    }
     if (command.action === 'cancel') {
+      // A parked arrangement is cancelled too. It never was: `cancel` only ever reached
+      // the engine, so declining a restyle left the proposal parked, and a later "yes"
+      // — about something else entirely — applied it. The panel merely stopped drawing
+      // it, which is what hid the bug.
+      pendingProposal = null;
       engine.cancel();
       return {
         status: 'applied',
@@ -1029,6 +1076,13 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
     restyle,
     /** What is waiting on a yes, for the panel to show. Null when nothing is. */
     pendingProposal: () => pendingProposal?.proposal ?? null,
+    /** Register the screen's handler for app actions. Returns an unsubscribe. */
+    onAppAction: (handler: (action: AppAction) => void) => {
+      appAction = handler;
+      return () => {
+        if (appAction === handler) appAction = null;
+      };
+    },
     nextId,
     moduleIds: { settling: settling.id },
     dispose: () => {
