@@ -65,8 +65,29 @@ export function disposeMaterialMaps(maps: MaterialMaps) {
   }
 }
 
+/**
+ * One decoded copy per material for the app's lifetime.
+ *
+ * Every object asking for `mat_oak_light` shares these textures. Loading per object
+ * instead would mean a fresh 1024² decode per map — about 12MB of GPU memory each
+ * time the same oak appears in the room. Six materials fully loaded is the ceiling.
+ */
+const cache = new Map<string, Promise<MaterialMaps>>();
+
+function sharedMaterialMaps(id: string): Promise<MaterialMaps> {
+  let pending = cache.get(id);
+  if (!pending) {
+    pending = loadMaterialMaps(id).catch((error) => {
+      cache.delete(id); // A failed load must not be cached as permanently broken.
+      throw error;
+    });
+    cache.set(id, pending);
+  }
+  return pending;
+}
+
 /** Null until loaded, and null forever if the server is unreachable — callers fall back to flat colour. */
-export function useMaterialMaps(id: string | null, repeat = 1): MaterialMaps | null {
+export function useMaterialMaps(id: string | null): MaterialMaps | null {
   const [maps, setMaps] = useState<MaterialMaps | null>(null);
   useEffect(() => {
     if (!id) {
@@ -74,22 +95,18 @@ export function useMaterialMaps(id: string | null, repeat = 1): MaterialMaps | n
       return;
     }
     let cancelled = false;
-    let owned: MaterialMaps | undefined;
-    loadMaterialMaps(id, repeat)
+    sharedMaterialMaps(id)
       .then((loaded) => {
-        if (cancelled) {
-          disposeMaterialMaps(loaded);
-          return;
-        }
-        owned = loaded;
-        setMaps(loaded);
+        if (!cancelled) setMaps(loaded);
       })
-      .catch(() => setMaps(null));
+      .catch(() => {
+        if (!cancelled) setMaps(null);
+      });
+    // Nothing is disposed here: the textures are shared, so releasing them when one
+    // object unmounts would blank every other object using the same material.
     return () => {
       cancelled = true;
-      if (owned) disposeMaterialMaps(owned);
-      setMaps(null);
     };
-  }, [id, repeat]);
+  }, [id]);
   return maps;
 }

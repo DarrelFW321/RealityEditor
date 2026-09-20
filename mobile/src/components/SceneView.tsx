@@ -14,8 +14,74 @@ import { PatchView } from './PatchView';
 import type { Patch } from '../runtime/patch';
 import type { PatchFill } from '../runtime/patches';
 import { textureBridgeAvailable } from '../adapters/frame-textures';
-import { shouldComposite, type ErasureVolume } from '@reality/spatial-engine';
+import { shouldComposite, DEFAULT_COLOR, type ErasureVolume } from '@reality/spatial-engine';
 import type { Texture } from 'three';
+import { useMaterialMaps } from '../rendering/objects/materials';
+
+// `material_ref` holds either a hex colour (what buildObject writes) or a catalog
+// material id (what CHANGE_MATERIAL writes). Only the latter has textures.
+const MATERIAL_ID = /^mat_[a-z0-9_]+$/;
+
+/** Used only where nobody has chosen anything, so a new object is not plain blue. */
+const DEFAULT_MATERIAL: Record<string, string> = {
+  bed: 'mat_boucle_cream',
+  sofa: 'mat_boucle_cream',
+  chair: 'mat_oak_light',
+  table: 'mat_oak_light',
+  shelf: 'mat_oak_light',
+  storage: 'mat_oak_light',
+  frame: 'mat_oak_light',
+};
+
+function materialFor(object: Parameters<typeof parts>[1]): string | null {
+  const ref = object.material_ref ?? '';
+  if (MATERIAL_ID.test(ref)) return ref;
+  // A hex that is not the default means someone asked for that colour. Painting a
+  // wood grain over it would be overriding a deliberate choice.
+  if (ref && ref !== DEFAULT_COLOR) return null;
+  return DEFAULT_MATERIAL[object.class] ?? null;
+}
+
+function ObjectParts({
+  scene,
+  object,
+  emissive,
+  transparent,
+  opacity,
+  depthWrite,
+}: {
+  scene: Parameters<typeof parts>[0];
+  object: Parameters<typeof parts>[1];
+  emissive: string;
+  transparent: boolean;
+  opacity: number;
+  depthWrite: boolean;
+}) {
+  // Null whenever there is no material, it has no textures, or the server is
+  // unreachable — falling back to exactly the flat colour drawn before.
+  const maps = useMaterialMaps(materialFor(object));
+  return (
+    <>
+      {parts(scene, object).map((part) => (
+        <mesh key={part.id} position={part.center}>
+          <boxGeometry args={part.size} />
+          <meshStandardMaterial
+            // White under a texture: the albedo already carries the material's own
+            // colour, and multiplying by part.color would darken it a second time.
+            color={maps ? '#ffffff' : part.color}
+            map={maps?.map ?? null}
+            normalMap={maps?.normalMap ?? null}
+            roughnessMap={maps?.roughnessMap ?? null}
+            emissive={emissive}
+            transparent={transparent}
+            opacity={opacity}
+            depthWrite={depthWrite}
+          />
+        </mesh>
+      ))}
+    </>
+  );
+}
 
 function CameraPose({
   frame,
@@ -293,28 +359,24 @@ export function SceneView({
                 onSelect(object.id);
               }}
             >
-              {parts(scene, object).map((part) => (
-                <mesh key={part.id} position={part.center}>
-                  <boxGeometry args={part.size} />
-                  <meshStandardMaterial
-                    color={part.color}
-                    emissive={
-                      // A carried object glows amber where it could not be released, so
-                      // drop validity is readable without looking away from the object.
-                      preview && snapshot.previewValidity?.ok === false
-                        ? '#7a3a12'
-                        : selectedId === object.id
-                          ? '#214d77'
-                          : '#000000'
-                    }
-                    transparent={ghosted || !!preview}
-                    // Not `visible={false}`: an outline of what is selected has to
-                    // survive, and a fully hidden mesh cannot show a carry preview.
-                    opacity={ghosted ? 0 : measured ? 0.35 : preview ? 0.65 : 1}
-                    depthWrite={!ghosted}
-                  />
-                </mesh>
-              ))}
+              <ObjectParts
+                scene={scene}
+                object={object}
+                emissive={
+                  // A carried object glows amber where it could not be released, so
+                  // drop validity is readable without looking away from the object.
+                  preview && snapshot.previewValidity?.ok === false
+                    ? '#7a3a12'
+                    : selectedId === object.id
+                      ? '#214d77'
+                      : '#000000'
+                }
+                transparent={ghosted || !!preview}
+                // Not `visible={false}`: an outline of what is selected has to
+                // survive, and a fully hidden mesh cannot show a carry preview.
+                opacity={ghosted ? 0 : measured ? 0.35 : preview ? 0.65 : 1}
+                depthWrite={!ghosted}
+              />
             </group>
           );
         })}
