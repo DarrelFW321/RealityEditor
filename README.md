@@ -96,9 +96,3 @@ npm run typecheck
 
 Most gates replay scripted tool calls, so agent behaviour is reproducible
 without a live model.
-
-## More
-
-- [Hackathon plan](docs/hackathon-plan.md) — the original build plan, owner
-  split, and the "do not build" list with the one rule we later reversed.
-- [Mobile setup](mobile/README.md) · [implementation status](docs/expo-implementation-status.md)
