@@ -210,6 +210,496 @@
       "bytes": 10981404,
       "triangles": 47496,
       "textures": 3
+    },
+    {
+      "id": "framed-painting",
+      "status": "complete",
+      "category": "painting",
+      "size": "medium",
+      "materialFamily": "wood",
+      "baseFinish": "painted canvas",
+      "tintable": false,
+      "keywords": [
+        "framed",
+        "canvas"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 0.6,
+        "height": 0.8,
+        "depth": 0.04
+      },
+      "label": "a framed painting, a rectangular canvas in a plain flat wooden frame",
+      "prompt": "a framed painting, a rectangular canvas in a plain flat wooden frame, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "pale natural oak, fine straight grain, matte clear finish, photoreal physically based material on a painting, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "c611bc9cea02d9a8a44447cf7cf67dd5569b3656c921027797cb39a2f553609d",
+      "file": "assets/c611bc9cea02d9a8a44447cf7cf67dd5569b3656c921027797cb39a2f553609d.glb",
+      "meshy": {
+        "previewTaskId": "01a0bcdd-7866-72df-81da-8a5da63da2f1",
+        "credits": 30,
+        "refineTaskId": "01a0bcde-9165-778e-8381-3cd10d695b1e",
+        "builtAt": "2026-09-20T03:32:36.719Z"
+      },
+      "bytes": 7151124,
+      "triangles": 50131,
+      "textures": 3
+    },
+    {
+      "id": "wall-mirror",
+      "status": "complete",
+      "category": "mirror",
+      "size": "medium",
+      "materialFamily": "wood",
+      "baseFinish": "mirrored glass",
+      "tintable": false,
+      "keywords": [
+        "round",
+        "wall"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 0.6,
+        "height": 0.8,
+        "depth": 0.04
+      },
+      "label": "a round wall mirror with a slim flat wooden frame",
+      "prompt": "a round wall mirror with a slim flat wooden frame, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "pale natural oak, fine straight grain, matte clear finish, photoreal physically based material on a mirror, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "bed23229c5aaeff7f8505e4887c7597f0b322ff34c482aa8321ebe58e045e45b",
+      "file": "assets/bed23229c5aaeff7f8505e4887c7597f0b322ff34c482aa8321ebe58e045e45b.glb",
+      "meshy": {
+        "previewTaskId": "01a0bcdf-774a-71f6-9d20-ea416dbe699e",
+        "credits": 30,
+        "refineTaskId": "01a0bce0-e04f-764e-829c-2e0c9d320fe5",
+        "builtAt": "2026-09-20T03:35:11.239Z"
+      },
+      "bytes": 9461776,
+      "triangles": 50315,
+      "textures": 3
+    },
+    {
+      "id": "three-seat-sofa",
+      "status": "complete",
+      "category": "sofa",
+      "size": "large",
+      "materialFamily": "fabric",
+      "baseFinish": "natural linen",
+      "tintable": true,
+      "keywords": [
+        "three seat",
+        "sofa"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 2.3,
+        "height": 0.85,
+        "depth": 0.95
+      },
+      "label": "a large three seat sofa upholstered in undyed natural linen with pale wooden legs",
+      "prompt": "a large three seat sofa upholstered in undyed natural linen with pale wooden legs, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "undyed natural linen weave, fine even texture, photoreal physically based material on a sofa, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "98d64b6834ccbf6ab6d2f9f47ba261ad62efe854d7c0b4abd532b4a056c4ba31",
+      "file": "assets/98d64b6834ccbf6ab6d2f9f47ba261ad62efe854d7c0b4abd532b4a056c4ba31.glb",
+      "meshy": {
+        "previewTaskId": "01a0bce2-4985-74a8-9063-2e5587fff53f",
+        "credits": 30,
+        "refineTaskId": "01a0bce3-3f10-776d-aa60-a591f7886bf2",
+        "builtAt": "2026-09-20T03:37:32.567Z"
+      },
+      "bytes": 7730044,
+      "triangles": 47924,
+      "textures": 3
+    },
+    {
+      "id": "platform-bed",
+      "status": "complete",
+      "category": "bed",
+      "size": "large",
+      "materialFamily": "fabric",
+      "baseFinish": "natural linen",
+      "tintable": true,
+      "keywords": [
+        "platform",
+        "headboard"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 1.93,
+        "height": 1.05,
+        "depth": 2.03
+      },
+      "label": "a large upholstered platform bed in undyed natural linen with a low headboard",
+      "prompt": "a large upholstered platform bed in undyed natural linen with a low headboard, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "undyed natural linen weave, fine even texture, photoreal physically based material on a bed, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "f9c270f83609378f31b49c33e22418d9682598202492b7c607d7b8c9334ec4a3",
+      "file": "assets/f9c270f83609378f31b49c33e22418d9682598202492b7c607d7b8c9334ec4a3.glb",
+      "meshy": {
+        "previewTaskId": "01a0bce3-faef-71e5-baa4-7191e8b30bf7",
+        "credits": 30,
+        "refineTaskId": "01a0bce4-e9cd-718f-90ef-441b99dcc7d7",
+        "builtAt": "2026-09-20T03:39:26.088Z"
+      },
+      "bytes": 7705660,
+      "triangles": 49427,
+      "textures": 3
+    },
+    {
+      "id": "writing-desk",
+      "status": "complete",
+      "category": "desk",
+      "size": "medium",
+      "materialFamily": "wood",
+      "baseFinish": "pale oak",
+      "tintable": true,
+      "keywords": [
+        "writing",
+        "drawer"
+      ],
+      "structure": {
+        "compartmentCount": 1
+      },
+      "dimensionsM": {
+        "width": 1.2,
+        "height": 0.75,
+        "depth": 0.6
+      },
+      "label": "a writing desk in pale oak with one drawer and four straight legs",
+      "prompt": "a writing desk in pale oak with one drawer and four straight legs, EXACTLY 1 drawers, no additional drawers or dividers, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "pale natural oak, fine straight grain, matte clear finish, photoreal physically based material on a desk, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "cb62606fe3c5179f2669fb0558a4cd9270482130cc93f80637bdd5de6c971454",
+      "file": "assets/cb62606fe3c5179f2669fb0558a4cd9270482130cc93f80637bdd5de6c971454.glb",
+      "meshy": {
+        "previewTaskId": "01a0bce5-b663-778c-a6d3-db713e24e8d7",
+        "credits": 30,
+        "refineTaskId": "01a0bce6-a8b1-752a-9d41-ce5624bc1014",
+        "builtAt": "2026-09-20T03:41:21.016Z"
+      },
+      "bytes": 7677796,
+      "triangles": 41799,
+      "textures": 3
+    },
+    {
+      "id": "low-bookshelf",
+      "status": "complete",
+      "category": "shelving_unit",
+      "size": "medium",
+      "materialFamily": "wood",
+      "baseFinish": "pale oak",
+      "tintable": true,
+      "keywords": [
+        "low",
+        "open"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 0.8,
+        "height": 1.4,
+        "depth": 0.3
+      },
+      "label": "a low bookshelf in pale oak with three open shelves",
+      "prompt": "a low bookshelf in pale oak with three open shelves, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "pale natural oak, fine straight grain, matte clear finish, photoreal physically based material on a shelving unit, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "b37595b4307fb418ec352d207893ac098d33fdd99b7049f5e08839341af42434",
+      "file": "assets/b37595b4307fb418ec352d207893ac098d33fdd99b7049f5e08839341af42434.glb",
+      "meshy": {
+        "previewTaskId": "01a0bce7-7754-7236-88a9-54c7075d3279",
+        "credits": 30,
+        "refineTaskId": "01a0bce8-c31b-76d3-a91a-33b4924796ab",
+        "builtAt": "2026-09-20T03:43:51.783Z"
+      },
+      "bytes": 7086624,
+      "triangles": 45373,
+      "textures": 3
+    },
+    {
+      "id": "tripod-floor-lamp",
+      "status": "complete",
+      "category": "floor_lamp",
+      "size": "medium",
+      "materialFamily": "fabric",
+      "baseFinish": "natural linen",
+      "tintable": true,
+      "keywords": [
+        "tripod",
+        "drum shade"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 0.4,
+        "height": 1.5,
+        "depth": 0.4
+      },
+      "label": "a tripod floor lamp with three pale wooden legs and a natural linen drum shade",
+      "prompt": "a tripod floor lamp with three pale wooden legs and a natural linen drum shade, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "undyed natural linen weave, fine even texture, photoreal physically based material on a floor lamp, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "bcc9a151e4de5812dc4fbe50259c95918f0bb876bb324a3c155e274c8aff3a1f",
+      "file": "assets/bcc9a151e4de5812dc4fbe50259c95918f0bb876bb324a3c155e274c8aff3a1f.glb",
+      "meshy": {
+        "previewTaskId": "01a0bce9-c443-719e-bbc1-cd00963cdd72",
+        "credits": 30,
+        "refineTaskId": "01a0bcea-aadf-72cb-8eb6-8d40cc630f22",
+        "builtAt": "2026-09-20T03:45:34.570Z"
+      },
+      "bytes": 10780960,
+      "triangles": 50729,
+      "textures": 3
+    },
+    {
+      "id": "two-drawer-nightstand",
+      "status": "complete",
+      "category": "nightstand",
+      "size": "medium",
+      "materialFamily": "wood",
+      "baseFinish": "pale oak",
+      "tintable": true,
+      "keywords": [
+        "bedside",
+        "drawers"
+      ],
+      "structure": {
+        "compartmentCount": 2
+      },
+      "dimensionsM": {
+        "width": 0.45,
+        "height": 0.55,
+        "depth": 0.4
+      },
+      "label": "a nightstand in pale oak with two drawers and four straight legs",
+      "prompt": "a nightstand in pale oak with two drawers and four straight legs, EXACTLY 2 drawers, no additional drawers or dividers, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "pale natural oak, fine straight grain, matte clear finish, photoreal physically based material on a nightstand, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "8365ee6d8d11a6769c08f2821cfff933c040ea3b7970dcbca01141d1f76830c0",
+      "file": "assets/8365ee6d8d11a6769c08f2821cfff933c040ea3b7970dcbca01141d1f76830c0.glb",
+      "meshy": {
+        "previewTaskId": "01a0bceb-55c4-7751-bb66-bf7b7e9ed9d2",
+        "credits": 30,
+        "refineTaskId": "01a0bcec-4946-77a4-92a7-e540139e93c4",
+        "builtAt": "2026-09-20T03:47:33.191Z"
+      },
+      "bytes": 7715136,
+      "triangles": 46047,
+      "textures": 3
+    },
+    {
+      "id": "television-on-stand",
+      "status": "complete",
+      "category": "television",
+      "size": "medium",
+      "materialFamily": "wood",
+      "baseFinish": "matte black and pale oak",
+      "tintable": false,
+      "keywords": [
+        "flat screen",
+        "stand"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 1.24,
+        "height": 0.78,
+        "depth": 0.25
+      },
+      "label": "a flat screen television resting on a low pale oak stand",
+      "prompt": "a flat screen television resting on a low pale oak stand, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "pale natural oak, fine straight grain, matte clear finish, photoreal physically based material on a television, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "2a7efafb267d4929cc0479bebc87410137ac1414eabba7639dffa314298c51c0",
+      "file": "assets/2a7efafb267d4929cc0479bebc87410137ac1414eabba7639dffa314298c51c0.glb",
+      "meshy": {
+        "previewTaskId": "01a0bced-2525-70f1-9438-68d50033efc1",
+        "credits": 30,
+        "refineTaskId": "01a0bcee-2996-72ae-aaa8-978afff208fb",
+        "builtAt": "2026-09-20T03:49:38.372Z"
+      },
+      "bytes": 9102308,
+      "triangles": 43096,
+      "textures": 3
+    },
+    {
+      "id": "desk-monitor",
+      "status": "complete",
+      "category": "monitor",
+      "size": "medium",
+      "materialFamily": "matte",
+      "baseFinish": "matte grey",
+      "tintable": false,
+      "keywords": [
+        "computer",
+        "stand"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 0.62,
+        "height": 0.45,
+        "depth": 0.2
+      },
+      "label": "a computer monitor on a slim central stand with a flat base",
+      "prompt": "a computer monitor on a slim central stand with a flat base, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "light warm grey matte surface, photoreal physically based material on a monitor, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "8521484429f7b171b15cfeadc08667d912ab44f8909f7165bb208f0dc07ed879",
+      "file": "assets/8521484429f7b171b15cfeadc08667d912ab44f8909f7165bb208f0dc07ed879.glb",
+      "meshy": {
+        "previewTaskId": "01a0bcef-0e21-76ed-889c-5451f7b4062e",
+        "credits": 30,
+        "refineTaskId": "01a0bcef-fa27-7410-8543-331d1aa0d2ba",
+        "builtAt": "2026-09-20T03:51:37.211Z"
+      },
+      "bytes": 8811552,
+      "triangles": 46071,
+      "textures": 3
+    },
+    {
+      "id": "task-chair",
+      "status": "complete",
+      "category": "office_chair",
+      "size": "medium",
+      "materialFamily": "fabric",
+      "baseFinish": "grey mesh",
+      "tintable": true,
+      "keywords": [
+        "mesh back",
+        "castors"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 0.65,
+        "height": 1.1,
+        "depth": 0.65
+      },
+      "label": "an office chair with a mesh back, an upholstered seat and a five point base on castors",
+      "prompt": "an office chair with a mesh back, an upholstered seat and a five point base on castors, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "undyed natural linen weave, fine even texture, photoreal physically based material on a office chair, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "4f0da4da7f93af26ec45fc51536d87d998a8ba2539c2828b7639557e8ffca183",
+      "file": "assets/4f0da4da7f93af26ec45fc51536d87d998a8ba2539c2828b7639557e8ffca183.glb",
+      "meshy": {
+        "previewTaskId": "01a0bcf0-de58-7022-aeb1-8f262955c6c7",
+        "credits": 30,
+        "refineTaskId": "01a0bcf2-09e8-7787-9197-6a3a79a019e3",
+        "builtAt": "2026-09-20T03:53:48.425Z"
+      },
+      "bytes": 10478888,
+      "triangles": 51189,
+      "textures": 3
+    },
+    {
+      "id": "stone-statue",
+      "status": "complete",
+      "category": "statue",
+      "size": "medium",
+      "materialFamily": "stone",
+      "baseFinish": "honed marble",
+      "tintable": true,
+      "keywords": [
+        "abstract",
+        "plinth"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 0.3,
+        "height": 0.6,
+        "depth": 0.3
+      },
+      "label": "a marble statue of an abstract standing figure on a square plinth",
+      "prompt": "a marble statue of an abstract standing figure on a square plinth, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "pale honed marble, fine natural veining, matte finish, photoreal physically based material on a statue, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "124aa667254af843fbae8ab8f97b33624baf1034f85e5dd1e1897320f22c75dd",
+      "file": "assets/124aa667254af843fbae8ab8f97b33624baf1034f85e5dd1e1897320f22c75dd.glb",
+      "meshy": {
+        "previewTaskId": "01a0bcf2-dee7-715b-8cc8-6587cd3474e1",
+        "credits": 30,
+        "refineTaskId": "01a0bcf3-aa8f-7698-ad83-c0070bfbb2dd",
+        "builtAt": "2026-09-20T03:55:26.645Z"
+      },
+      "bytes": 8812316,
+      "triangles": 51188,
+      "textures": 3
+    },
+    {
+      "id": "tall-ceramic-vase",
+      "status": "complete",
+      "category": "vase",
+      "size": "large",
+      "materialFamily": "stone",
+      "baseFinish": "unglazed ceramic",
+      "tintable": true,
+      "keywords": [
+        "narrow neck",
+        "rounded"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 0.42,
+        "height": 0.65,
+        "depth": 0.42
+      },
+      "label": "a tall ceramic vase with a narrow neck and a rounded body",
+      "prompt": "a tall ceramic vase with a narrow neck and a rounded body, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "pale honed marble, fine natural veining, matte finish, photoreal physically based material on a vase, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "cb89dc38430ae80495e177605db7196e0fbd581d63cba8098004e1a6b322743e",
+      "file": "assets/cb89dc38430ae80495e177605db7196e0fbd581d63cba8098004e1a6b322743e.glb",
+      "meshy": {
+        "previewTaskId": "01a0bcf4-5e94-7422-b915-b35aae352e87",
+        "credits": 30,
+        "refineTaskId": "01a0bcf5-22f6-703c-ada5-0cdf044f9c82",
+        "builtAt": "2026-09-20T03:57:08.062Z"
+      },
+      "bytes": 6277060,
+      "triangles": 52272,
+      "textures": 3
+    },
+    {
+      "id": "potted-plant",
+      "status": "complete",
+      "category": "plant",
+      "size": "medium",
+      "materialFamily": "foliage",
+      "baseFinish": "green foliage",
+      "tintable": false,
+      "keywords": [
+        "potted",
+        "leaves"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 0.4,
+        "height": 0.8,
+        "depth": 0.4
+      },
+      "label": "a potted plant with broad upright leaves in a plain round pot",
+      "prompt": "a potted plant with broad upright leaves in a plain round pot, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "fresh green leaves, natural matte leaf surface, subtle veining, photoreal physically based material on a plant, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "a70d0a1d04cdf208bbcdcf406841a759ef304f3f8c7cdc71fb693256d88a1f4b",
+      "file": "assets/a70d0a1d04cdf208bbcdcf406841a759ef304f3f8c7cdc71fb693256d88a1f4b.glb",
+      "meshy": {
+        "previewTaskId": "01a0bcf5-eabe-7691-8205-2c0fcd07300c",
+        "credits": 30,
+        "refineTaskId": "01a0bcf7-5805-738e-81bf-0af8a4ec23f7",
+        "builtAt": "2026-09-20T03:59:38.280Z"
+      },
+      "bytes": 10385864,
+      "triangles": 51223,
+      "textures": 3
     }
   ]
 }
