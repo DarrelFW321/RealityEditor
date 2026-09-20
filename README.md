@@ -1,6 +1,10 @@
+![Reality Editor](logo.png)
+
 # Reality Editor
 
 Scan a room with LiDAR. Point your phone at things and talk. The room changes.
+
+**▶ [Watch the demo](https://www.youtube.com/watch?v=LN3sCLuW9B0)**
 
 The model never generates images. It emits structured operations against a
 persistent 3D scene graph, and a constraint solver validates every one against
