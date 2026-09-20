@@ -1,8 +1,7 @@
 import type { FastifyInstance } from "fastify";
-import Anthropic from "@anthropic-ai/sdk";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { config, missingKeyResponse } from "../config.js";
+import { strictJsonSchema } from "../openai-json.js";
 import { loadManifest, filterByFreeSpace } from "../catalog.js";
 import { OpCoreSchema, type OpCore } from "../contracts.js";
 
@@ -72,6 +71,12 @@ const PlannedOpSchema = z.object({
   rationale: z.string().max(140).describe("One clause, for the spoken summary."),
 });
 
+/** What actually comes back: same shape, no lengths, because strict mode drops them. */
+const PlanWireSchema = z.object({
+  summary: z.string(),
+  ops: z.array(PlannedOpSchema.extend({ rationale: z.string() })),
+});
+
 const PlanSchema = z.object({
   summary: z.string().max(240).describe("One or two sentences, read aloud verbatim."),
   ops: z.array(PlannedOpSchema).max(config.planner.maxOps),
@@ -109,8 +114,8 @@ function toOpCore(p: z.infer<typeof PlannedOpSchema>): OpCore {
 
 export async function registerPlanStyleRoute(app: FastifyInstance) {
   app.post("/plan_style", async (request, reply) => {
-    if (!config.anthropicApiKey) {
-      return reply.code(503).send(missingKeyResponse("ANTHROPIC_API_KEY"));
+    if (!config.openaiApiKey) {
+      return reply.code(503).send(missingKeyResponse("OPENAI_API_KEY"));
     }
 
     const parsed = RequestSchema.safeParse(request.body);
@@ -132,55 +137,84 @@ export async function registerPlanStyleRoute(app: FastifyInstance) {
     const catalogIDs = new Set(fits.map((e) => e.id));
     const materialIDs = new Set(manifest.materials.map((m) => m.id));
 
-    const client = new Anthropic({ apiKey: config.anthropicApiKey });
+    const system = [
+      "You are an interior designer working against a measured 3D scan of a real room.",
+      "",
+      "HARD RULES:",
+      "- Use ONLY entity ids, catalog ids and material ids given below. Anything else is discarded.",
+      "- The catalogue has already been filtered to what physically fits. Do not ask for more.",
+      "- If the requested kind of furniture has no large option in that filtered list, choose a",
+      "  smaller fitting option of the same class and say that substitution plainly in the summary.",
+      "- Never emit coordinates, dimensions or distances. Express placement as relation + anchor;",
+      "  the device's solver computes the pose against real geometry and may move it.",
+      `- At most ${config.planner.maxOps} ops. Fewer and better beats more.`,
+      "- Change materials and colours before you add objects. A repaint reads instantly on camera;",
+      "  a new object has to be placed, solved, and can be rejected.",
+      "- Do not touch anything with movable=false.",
+    ].join("\n");
 
     let plan: z.infer<typeof PlanSchema> | null = null;
     try {
-      const response = await client.messages.parse({
-        model: config.planner.model,
-        max_tokens: 8000,
-        system: [
-          "You are an interior designer working against a measured 3D scan of a real room.",
-          "",
-          "HARD RULES:",
-          "- Use ONLY entity ids, catalog ids and material ids given below. Anything else is discarded.",
-          "- The catalogue has already been filtered to what physically fits. Do not ask for more.",
-          "- If the requested kind of furniture has no large option in that filtered list, choose a",
-          "  smaller fitting option of the same class and say that substitution plainly in the summary.",
-          "- Never emit coordinates, dimensions or distances. Express placement as relation + anchor;",
-          "  the device's solver computes the pose against real geometry and may move it.",
-          `- At most ${config.planner.maxOps} ops. Fewer and better beats more.`,
-          "- Change materials and colours before you add objects. A repaint reads instantly on camera;",
-          "  a new object has to be placed, solved, and can be rejected.",
-          "- Do not touch anything with movable=false.",
-        ].join("\n"),
-        messages: [{
-          role: "user",
-          content: JSON.stringify({
-            theme: room.theme,
-            room: {
-              area_m2: room.area_m2,
-              ceiling_height: room.ceiling_height,
-              largest_open_rect_m: room.largest_open_rect.size,
-            },
-            objects: room.objects,
-            surfaces: room.surfaces,
-            available_materials: manifest.materials,
-            available_catalog_that_fits: fits.map((e) => ({
-              id: e.id, class: e.class, style_tags: e.style_tags, dims_m: e.dims_m,
-            })),
-          }),
-        }],
-        // Adaptive thinking on, effort held low: this is a taste call, not a hard
-        // reasoning problem, and every extra second here is a second of animation
-        // the user is watching instead of their room.
-        thinking: { type: "adaptive" },
-        output_config: {
-          effort: "low",
-          format: zodOutputFormat(PlanSchema),
+      const response = await fetch(config.planner.url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.openaiApiKey}`,
+          "Content-Type": "application/json",
         },
+        body: JSON.stringify({
+          model: config.planner.model,
+          messages: [
+            { role: "system", content: system },
+            {
+              role: "user",
+              content: JSON.stringify({
+                theme: room.theme,
+                room: {
+                  area_m2: room.area_m2,
+                  ceiling_height: room.ceiling_height,
+                  largest_open_rect_m: room.largest_open_rect.size,
+                },
+                objects: room.objects,
+                surfaces: room.surfaces,
+                available_materials: manifest.materials,
+                available_catalog_that_fits: fits.map((e) => ({
+                  id: e.id, class: e.class, style_tags: e.style_tags, dims_m: e.dims_m,
+                })),
+              }),
+            },
+          ],
+          // Shape is constrained here; CONTENT is still checked below, because a
+          // schema cannot stop the model naming an id that does not exist.
+          response_format: {
+            type: "json_schema",
+            json_schema: { name: "style_plan", strict: true, schema: strictJsonSchema(PlanSchema) },
+          },
+        }),
+        // Off the critical path, but the user is watching an animation meanwhile.
+        signal: AbortSignal.timeout(config.planner.timeoutMs),
       });
-      plan = response.parsed_output;
+      if (!response.ok) {
+        request.log.error({ status: response.status, body: (await response.text()).slice(0, 400) }, "style planner call failed");
+        return reply.code(502).send({ error: "planner_failed" });
+      }
+      const completion = (await response.json()) as { choices?: { message?: { content?: string } }[] };
+      const content = completion.choices?.[0]?.message?.content;
+      // Parsed WITHOUT the length limits, then clamped. Strict mode cannot carry
+      // maxLength, so re-imposing it here would throw away a whole usable plan
+      // over one long sentence. Truncating the summary is the lesser failure.
+      const wire = content ? PlanWireSchema.safeParse(JSON.parse(content)) : null;
+      if (wire && !wire.success) {
+        request.log.error({ issues: wire.error.issues.slice(0, 5) }, "style planner output did not match the schema");
+      }
+      plan = wire?.success
+        ? {
+            summary: wire.data.summary.slice(0, 240),
+            ops: wire.data.ops.slice(0, config.planner.maxOps).map((op) => ({
+              ...op,
+              rationale: op.rationale.slice(0, 140),
+            })),
+          }
+        : null;
     } catch (err) {
       request.log.error({ err }, "style planner call failed");
       return reply.code(502).send({ error: "planner_failed" });

@@ -58,7 +58,7 @@ export async function buildApp(
     ok: true,
     realtime_model: config.realtime.model,
     openai_key_present: config.openaiApiKey.length > 0,
-    anthropic_key_present: config.anthropicApiKey.length > 0,
+    planner_model: config.planner.model,
     // Whether reconstruction can run at all. Previously you had to call /capabilities to
     // find out, so a 503 from /reconstruct looked like a bug rather than "no worker set".
     reconstruction: store.providerId,
