@@ -1,0 +1,384 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Catalog contact sheet</title>
+
+<!--
+  Every generated catalog object, rendered from its own GLB.
+
+    python3 -m http.server 8080          # from the repo root
+    open http://localhost:8080/tools/catalog-sheet.html
+
+  Served from the repo root rather than from catalog/generated, so three comes from
+  node_modules at the exact version the app renders with (0.186.0). No CDN, no network:
+  the assets are 171MB and the point of this page is to look at what is on disk.
+
+  It also re-measures each mesh. `dimensionsM` in the manifest is load-bearing — the
+  planner filters by it and `useCatalogMesh` scales the mesh to it — so a declared size
+  that disagrees with the geometry is offered for rooms it does not fit. That check is
+  the reason this is a tool and not a screenshot.
+-->
+
+<script type="importmap">
+  {
+    "imports": {
+      "three": "/node_modules/three/build/three.module.js",
+      "three/addons/": "/node_modules/three/examples/jsm/"
+    }
+  }
+</script>
+
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0c1420;
+    --card: #141d2b;
+    --line: #22304a;
+    --ink: #e8eef7;
+    --dim: #8b9ab1;
+    --warn: #e0a33c;
+    --bad: #d9636b;
+    --ok: #6fbf8b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 16px 64px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.5 ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
+  }
+  header { max-width: 1400px; margin: 0 auto 20px; }
+  h1 { margin: 0 0 4px; font-size: 20px; font-weight: 650; letter-spacing: -0.01em; }
+  .sub { color: var(--dim); }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 12px; align-items: center; }
+  .bar label { color: var(--dim); display: flex; gap: 6px; align-items: center; }
+  input[type="search"] {
+    background: var(--card); border: 1px solid var(--line); color: var(--ink);
+    border-radius: 8px; padding: 6px 10px; min-width: 200px; font: inherit;
+  }
+  .grid {
+    max-width: 1400px; margin: 0 auto;
+    display: grid; gap: 14px;
+    grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    overflow: hidden; display: flex; flex-direction: column; cursor: pointer;
+  }
+  .card:hover { border-color: #3a5480; }
+  .shot { aspect-ratio: 4 / 3; width: 100%; display: block; background: #0f1826; }
+  .meta { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 3px; }
+  .id { font-weight: 600; font-size: 13.5px; }
+  .row { color: var(--dim); font-size: 12px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .tag {
+    font-size: 11px; padding: 1px 6px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--dim);
+  }
+  .tag.no-tint { border-color: #4a3a22; color: var(--warn); }
+  .delta.ok { color: var(--ok); }
+  .delta.warn { color: var(--warn); }
+  .delta.bad { color: var(--bad); }
+  .status { color: var(--dim); max-width: 1400px; margin: 0 auto 12px; }
+  dialog {
+    border: 1px solid var(--line); background: var(--card); color: var(--ink);
+    border-radius: 14px; padding: 0; width: min(92vw, 780px);
+  }
+  dialog::backdrop { background: rgba(4, 8, 14, 0.72); }
+  dialog .head { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; }
+  dialog canvas { width: 100%; aspect-ratio: 4 / 3; display: block; background: #0f1826; }
+  dialog .foot { padding: 12px 16px; color: var(--dim); font-size: 12.5px; }
+  button {
+    background: #1d2a3f; border: 1px solid var(--line); color: var(--ink);
+    border-radius: 8px; padding: 5px 12px; font: inherit; cursor: pointer;
+  }
+</style>
+
+<header>
+  <h1>Catalog contact sheet</h1>
+  <div class="sub" id="sub">Loading manifest…</div>
+  <div class="bar">
+    <input type="search" id="q" placeholder="filter by id, category, keyword" />
+    <label><input type="checkbox" id="onlyMismatch" /> only size mismatches</label>
+    <label><input type="checkbox" id="wire" /> wireframe</label>
+  </div>
+</header>
+
+<div class="status" id="status"></div>
+<div class="grid" id="grid"></div>
+
+<dialog id="viewer">
+  <div class="head"><strong id="vtitle"></strong><button id="vclose">Close</button></div>
+  <canvas id="vcanvas"></canvas>
+  <div class="foot" id="vfoot"></div>
+</dialog>
+
+<script type="module">
+  import * as THREE from 'three';
+  import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+  const ROOT = '/catalog/generated/';
+  const SHOT = { w: 472, h: 354 };            // 2x the card's CSS box, for retina
+  const loader = new GLTFLoader();
+
+  const grid = document.getElementById('grid');
+  const statusLine = document.getElementById('status');
+
+  // ONE renderer for every thumbnail. Twenty 2K-textured GLBs is ~171MB of geometry and
+  // texture; holding twenty live scenes would exhaust the GPU. Each model is rendered,
+  // copied into the card's own 2D canvas, and then disposed.
+  // preserveDrawingBuffer, because the thumbnail is taken by drawImage AFTER render.
+  // Without it the drawing buffer may be cleared before the copy and cards come out black.
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    alpha: false,
+    preserveDrawingBuffer: true,
+  });
+  renderer.setSize(SHOT.w, SHOT.h, false);
+  renderer.setPixelRatio(1);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+  function lit(scene) {
+    // The bakes carry their own albedo but are PBR, not unlit, so they need light to
+    // read at all. Flat and even on purpose: this is a comparison sheet, and a dramatic
+    // key light would make half the objects look darker than they are.
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x2a3446, 2.1));
+    const key = new THREE.DirectionalLight(0xffffff, 1.5);
+    key.position.set(2.4, 3.4, 2.8);
+    scene.add(key);
+    const fill = new THREE.DirectionalLight(0xffffff, 0.55);
+    fill.position.set(-2.2, 1.4, -1.8);
+    scene.add(fill);
+  }
+
+  /** Frames the whole bounding sphere, so a wide sofa and a tall lamp both fit. */
+  function frame(camera, box, azimuth = Math.PI * 0.22) {
+    const size = box.getSize(new THREE.Vector3());
+    const centre = box.getCenter(new THREE.Vector3());
+    const radius = Math.max(size.length() / 2, 1e-3);
+    const fov = (camera.fov * Math.PI) / 180;
+    const distance = (radius / Math.sin(fov / 2)) * 1.12;
+    camera.position.set(
+      centre.x + Math.sin(azimuth) * distance * 0.86,
+      centre.y + distance * 0.42,
+      centre.z + Math.cos(azimuth) * distance * 0.86,
+    );
+    camera.near = Math.max(distance / 100, 0.01);
+    camera.far = distance * 10;
+    camera.lookAt(centre);
+    camera.updateProjectionMatrix();
+    return centre;
+  }
+
+  function dispose(object) {
+    object.traverse((node) => {
+      if (!node.isMesh) return;
+      node.geometry?.dispose();
+      for (const material of [].concat(node.material ?? [])) {
+        for (const value of Object.values(material)) value?.isTexture && value.dispose();
+        material.dispose();
+      }
+    });
+  }
+
+  function triangles(object) {
+    let total = 0;
+    object.traverse((node) => {
+      if (!node.isMesh) return;
+      const geometry = node.geometry;
+      total += geometry.index ? geometry.index.count / 3 : geometry.attributes.position.count / 3;
+    });
+    return Math.round(total);
+  }
+
+  const fmt = (n) => (Math.round(n * 1000) / 1000).toFixed(2);
+
+  /**
+   * Declared size against measured geometry.
+   *
+   * useCatalogMesh scales UNIFORMLY by the longest axis, so that axis is the one that is
+   * actually honoured on screen; the other two are whatever the mesh's own proportions
+   * make them. A card reports the worst per-axis disagreement after that uniform scale,
+   * which is exactly the error a user would see standing next to it.
+   */
+  function sizeCheck(declared, measured) {
+    if (!declared) return null;
+    const want = [declared.width, declared.height, declared.depth];
+    const scale = Math.max(...want) / Math.max(measured.x, measured.y, measured.z);
+    const drawn = [measured.x * scale, measured.y * scale, measured.z * scale];
+    const worst = Math.max(...want.map((w, i) => Math.abs(drawn[i] - w)));
+    return { want, drawn, worst };
+  }
+
+  // A thrown module error used to leave the page sitting on its initial text with the
+  // reason only in devtools. Anything that escapes now lands on screen.
+  const fail = (what, error) => {
+    statusLine.innerHTML = `<span class="delta bad">${what}: ${error?.message ?? error}</span>`;
+    console.error(what, error);
+  };
+  addEventListener('error', (event) => fail('Page error', event.error ?? event.message));
+  addEventListener('unhandledrejection', (event) => fail('Unhandled rejection', event.reason));
+
+  /** Rejects instead of hanging. One unresolved load used to stall all twenty. */
+  const within = (promise, ms, what) =>
+    Promise.race([
+      promise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`${what} did not finish within ${ms / 1000}s`)), ms),
+      ),
+    ]);
+
+  let manifest;
+  try {
+    manifest = await within(
+      fetch(`${ROOT}manifest.json`).then((r) => r.json()),
+      15_000,
+      'the manifest',
+    );
+  } catch (error) {
+    fail(
+      'Could not read the manifest — serve the REPO ROOT (python3 -m http.server 8080) and open /tools/catalog-sheet.html',
+      error,
+    );
+    throw error;
+  }
+
+  const entries = manifest.entries.filter((entry) => entry.file);
+  document.getElementById('sub').textContent =
+    `${entries.length} objects · three r${THREE.REVISION} · rendered from the GLBs on disk`;
+
+  const cards = entries.map((entry) => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const canvas = document.createElement('canvas');
+    canvas.className = 'shot';
+    canvas.width = SHOT.w;
+    canvas.height = SHOT.h;
+    card.append(canvas);
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.innerHTML = `<div class="id"></div><div class="row r1"></div><div class="row r2"></div>`;
+    card.append(meta);
+    meta.querySelector('.id').textContent = entry.id;
+    meta.querySelector('.r1').innerHTML =
+      `<span class="tag">${entry.category.replace(/_/g, ' ')}</span>` +
+      `<span class="tag">${entry.size}</span>` +
+      `<span class="tag">${entry.materialFamily}</span>` +
+      (entry.tintable === false ? `<span class="tag no-tint">keeps own colour</span>` : '');
+    card.addEventListener('click', () => open(entry));
+    grid.append(card);
+    return { entry, card, canvas, meta, mismatch: false };
+  });
+
+  let done = 0;
+  for (const item of cards) {
+    const { entry, canvas, meta } = item;
+    const size = entry.bytes ? ` (${(entry.bytes / 1e6).toFixed(1)}MB)` : '';
+    statusLine.textContent = `Rendering ${++done} of ${cards.length} — ${entry.id}${size}`;
+    meta.querySelector('.r2').innerHTML = `<span class="tag">loading…</span>`;
+    try {
+      // 90s: these are 8–9MB each over a local static server, so a slow one is a fault
+      // rather than a wait. Whatever the cause, the sheet moves on to the next object.
+      const gltf = await within(loader.loadAsync(ROOT + entry.file), 90_000, entry.id);
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x0f1826);
+      lit(scene);
+      scene.add(gltf.scene);
+      if (document.getElementById('wire').checked)
+        gltf.scene.traverse((n) => n.isMesh && (n.material.wireframe = true));
+
+      const box = new THREE.Box3().setFromObject(gltf.scene);
+      const measured = box.getSize(new THREE.Vector3());
+      const camera = new THREE.PerspectiveCamera(38, SHOT.w / SHOT.h, 0.01, 100);
+      frame(camera, box);
+      renderer.render(scene, camera);
+      canvas.getContext('2d').drawImage(renderer.domElement, 0, 0);
+
+      const check = sizeCheck(entry.dimensionsM, measured);
+      const tris = triangles(gltf.scene);
+      // The catalog README's budget is 15k triangles per model.
+      const overBudget = tris > 15000;
+      const klass = !check ? '' : check.worst < 0.02 ? 'ok' : check.worst < 0.10 ? 'warn' : 'bad';
+      item.mismatch = check ? check.worst >= 0.02 : false;
+      meta.querySelector('.r2').innerHTML =
+        (check
+          ? `<span class="delta ${klass}">declared ${check.want.map(fmt).join(' × ')} m` +
+            (check.worst < 0.005 ? ' ✓' : ` · drawn ${check.drawn.map(fmt).join(' × ')}`) +
+            `</span>`
+          : `<span class="delta bad">no declared size</span>`) +
+        `<span class="tag${overBudget ? ' no-tint' : ''}">${tris.toLocaleString()} tris</span>` +
+        `<span class="tag">${(entry.bytes ? entry.bytes / 1e6 : 0).toFixed(1)}MB</span>`;
+
+      dispose(gltf.scene);
+    } catch (error) {
+      // The reason on the card, not only in the console: a sheet with one blank tile and
+      // no explanation is what sent me to devtools in the first place.
+      meta.querySelector('.r2').innerHTML =
+        `<span class="delta bad">${(error?.message ?? 'failed to load').slice(0, 60)}</span>`;
+      console.error(entry.id, error);
+    }
+  }
+  statusLine.textContent = `${cards.length} rendered. Click any object to orbit it.`;
+
+  // ------------------------------------------------------------------ filtering
+
+  const apply = () => {
+    const needle = document.getElementById('q').value.trim().toLowerCase();
+    const onlyMismatch = document.getElementById('onlyMismatch').checked;
+    for (const { entry, card, mismatch } of cards) {
+      const hay = `${entry.id} ${entry.category} ${entry.materialFamily} ${(entry.keywords ?? []).join(' ')} ${entry.label ?? ''}`.toLowerCase();
+      card.hidden = (needle && !hay.includes(needle)) || (onlyMismatch && !mismatch);
+    }
+  };
+  document.getElementById('q').addEventListener('input', apply);
+  document.getElementById('onlyMismatch').addEventListener('change', apply);
+  document.getElementById('wire').addEventListener('change', () => location.reload());
+
+  // ------------------------------------------------------------------ orbit one
+
+  const dialog = document.getElementById('viewer');
+  const vcanvas = document.getElementById('vcanvas');
+  let live = null;
+
+  document.getElementById('vclose').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('close', () => {
+    if (!live) return;
+    cancelAnimationFrame(live.raf);
+    dispose(live.gltf.scene);
+    live.renderer.dispose();
+    live = null;
+  });
+
+  async function open(entry) {
+    document.getElementById('vtitle').textContent = entry.id;
+    document.getElementById('vfoot').textContent = entry.label ?? entry.prompt ?? '';
+    dialog.showModal();
+    const width = vcanvas.clientWidth || 720;
+    const height = Math.round((width * 3) / 4);
+    const own = new THREE.WebGLRenderer({ canvas: vcanvas, antialias: true });
+    own.setSize(width, height, false);
+    own.setPixelRatio(Math.min(devicePixelRatio, 2));
+    own.outputColorSpace = THREE.SRGBColorSpace;
+
+    const gltf = await loader.loadAsync(ROOT + entry.file);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0f1826);
+    lit(scene);
+    scene.add(gltf.scene);
+    const box = new THREE.Box3().setFromObject(gltf.scene);
+    const camera = new THREE.PerspectiveCamera(38, width / height, 0.01, 100);
+
+    // A slow turntable rather than mouse orbit: no OrbitControls import, and a rotating
+    // object shows silhouette problems — a missing leg, a hollow back — that one angle hides.
+    let angle = Math.PI * 0.22;
+    const tick = () => {
+      angle += 0.005;
+      const centre = frame(camera, box, angle);
+      camera.lookAt(centre);
+      own.render(scene, camera);
+      live.raf = requestAnimationFrame(tick);
+    };
+    live = { gltf, renderer: own, raf: 0 };
+    tick();
+  }
+</script>
