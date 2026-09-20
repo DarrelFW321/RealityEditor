@@ -50,6 +50,22 @@ TEXTURES = {
     "mat_felt_grey":    "poly_wool_herringbone",
     "mat_boucle_cream": "curly_teddy_natural",
     "mat_linen_oat":    "terlenka",
+    # Surfaces. Floor and walls are the largest things in a scanned room, and
+    # mat_oak_floor was declared in the manifest with nothing behind it.
+    "mat_oak_floor":    "wood_floor",
+    # clay_plaster reads as brown clay, not a wall. This one averages #bbb2a3.
+    "mat_wall_plaster": "plastered_wall_02",
+    "mat_concrete":     "concrete",
+    # Families materials.ts already declares but could not draw. The CC0 library has
+    # no light brushed steel — every flat metal in it is dark — so the id says dark.
+    "mat_metal_dark":   "metal_plate_02",
+    "mat_leather_tan":  "brown_leather",
+    # marble_01 is beige, not white. Named for the colour it actually is, since the
+    # planner picks by base_color_hex and a wrong swatch makes it choose badly.
+    "mat_marble_beige": "marble_01",
+    # No rattan or wicker in the CC0 library; bamboo veneer is the nearest weave.
+    "mat_bamboo":       "bamboo_veneer",
+    "mat_velvet_deep":  "velour_velvet",
 }
 
 # Poly Haven map key -> file the renderer looks for.

@@ -38,7 +38,16 @@
         "warm",
         "midcentury"
       ],
-      "base_color_hex": "#b08653"
+      "base_color_hex": "#7f6042",
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "wood_floor",
+        "url": "https://polyhaven.com/a/wood_floor",
+        "license": "CC0",
+        "authors": [
+          "Dimitrios Savva"
+        ]
+      }
     },
     {
       "id": "mat_ash_pale",
@@ -46,7 +55,16 @@
         "scandinavian",
         "minimal"
       ],
-      "base_color_hex": "#d9cbb4"
+      "base_color_hex": "#7e6240",
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "plywood",
+        "url": "https://polyhaven.com/a/plywood",
+        "license": "CC0",
+        "authors": [
+          "Rob Tuytel"
+        ]
+      }
     },
     {
       "id": "mat_oak_light",
@@ -54,7 +72,16 @@
         "scandinavian",
         "midcentury"
       ],
-      "base_color_hex": "#c9a877"
+      "base_color_hex": "#a17e57",
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "oak_veneer_01",
+        "url": "https://polyhaven.com/a/oak_veneer_01",
+        "license": "CC0",
+        "authors": [
+          "Jenelle van Heerden"
+        ]
+      }
     },
     {
       "id": "mat_linen_oat",
@@ -63,7 +90,17 @@
         "japandi",
         "warm"
       ],
-      "base_color_hex": "#ded5c4"
+      "base_color_hex": "#c5af98",
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "terlenka",
+        "url": "https://polyhaven.com/a/terlenka",
+        "license": "CC0",
+        "authors": [
+          "Rico Cilliers",
+          "colormass"
+        ]
+      }
     },
     {
       "id": "mat_felt_grey",
@@ -71,7 +108,17 @@
         "minimal",
         "industrial"
       ],
-      "base_color_hex": "#8d8f8c"
+      "base_color_hex": "#797670",
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "poly_wool_herringbone",
+        "url": "https://polyhaven.com/a/poly_wool_herringbone",
+        "license": "CC0",
+        "authors": [
+          "Rico Cilliers",
+          "colormass"
+        ]
+      }
     },
     {
       "id": "mat_boucle_cream",
@@ -79,7 +126,17 @@
         "scandinavian",
         "soft"
       ],
-      "base_color_hex": "#e6dfd2"
+      "base_color_hex": "#e8d3bb",
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "curly_teddy_natural",
+        "url": "https://polyhaven.com/a/curly_teddy_natural",
+        "license": "CC0",
+        "authors": [
+          "Rico Cilliers",
+          "colormass"
+        ]
+      }
     },
     {
       "id": "mat_walnut_dark",
@@ -87,7 +144,16 @@
         "midcentury",
         "warm"
       ],
-      "base_color_hex": "#5b4433"
+      "base_color_hex": "#423021",
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "fine_grained_wood",
+        "url": "https://polyhaven.com/a/fine_grained_wood",
+        "license": "CC0",
+        "authors": [
+          "Rob Tuytel"
+        ]
+      }
     },
     {
       "id": "mat_glass_clear",
@@ -95,6 +161,126 @@
         "neutral"
       ],
       "base_color_hex": "#dfe7ea"
+    },
+    {
+      "id": "mat_wall_plaster",
+      "style_tags": [
+        "neutral",
+        "minimal"
+      ],
+      "base_color_hex": "#bbb2a3",
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "plastered_wall_02",
+        "url": "https://polyhaven.com/a/plastered_wall_02",
+        "license": "CC0",
+        "authors": [
+          "Charlotte Baglioni"
+        ]
+      }
+    },
+    {
+      "id": "mat_metal_dark",
+      "style_tags": [
+        "industrial",
+        "minimal"
+      ],
+      "base_color_hex": "#54493d",
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "metal_plate_02",
+        "url": "https://polyhaven.com/a/metal_plate_02",
+        "license": "CC0",
+        "authors": [
+          "Rob Tuytel"
+        ]
+      }
+    },
+    {
+      "id": "mat_leather_tan",
+      "style_tags": [
+        "warm",
+        "midcentury"
+      ],
+      "base_color_hex": "#512d10",
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "brown_leather",
+        "url": "https://polyhaven.com/a/brown_leather",
+        "license": "CC0",
+        "authors": [
+          "Rob Tuytel"
+        ]
+      }
+    },
+    {
+      "id": "mat_marble_beige",
+      "style_tags": [
+        "neutral",
+        "minimal"
+      ],
+      "base_color_hex": "#b19d7a",
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "marble_01",
+        "url": "https://polyhaven.com/a/marble_01",
+        "license": "CC0",
+        "authors": [
+          "Rob Tuytel"
+        ]
+      }
+    },
+    {
+      "id": "mat_concrete",
+      "style_tags": [
+        "industrial",
+        "minimal"
+      ],
+      "base_color_hex": "#72695a",
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "concrete",
+        "url": "https://polyhaven.com/a/concrete",
+        "license": "CC0",
+        "authors": [
+          "Rob Tuytel"
+        ]
+      }
+    },
+    {
+      "id": "mat_bamboo",
+      "style_tags": [
+        "warm",
+        "japandi"
+      ],
+      "base_color_hex": "#d2ad80",
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "bamboo_veneer",
+        "url": "https://polyhaven.com/a/bamboo_veneer",
+        "license": "CC0",
+        "authors": [
+          "Jenelle van Heerden"
+        ]
+      }
+    },
+    {
+      "id": "mat_velvet_deep",
+      "style_tags": [
+        "soft",
+        "warm"
+      ],
+      "base_color_hex": "#ad2d47",
+      "source": {
+        "provider": "Poly Haven",
+        "asset": "velour_velvet",
+        "url": "https://polyhaven.com/a/velour_velvet",
+        "license": "CC0",
+        "authors": [
+          "Rico Cilliers",
+          "colormass"
+        ]
+      }
     }
   ],
   "entries": [
