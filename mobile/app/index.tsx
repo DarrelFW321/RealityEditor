@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { GlassPanel, GlassPill } from '../src/components/Glass';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { File, Paths } from 'expo-file-system';
 import { sampleRoom } from '@reality/dev-scenarios';
@@ -26,6 +27,7 @@ export default function Home() {
   // "Calibration has visible states: observing, needs another view, reconstructing, ready,
   // and failed/retry." `needs_view` and `failed` are the two that were missing: coverage had
   // no way to ask for anything, and every failure silently reset the sweep to zero.
+  const [editor, setEditor] = useState<Editor | null>(null);
   const [phase, setPhase] = useState<
     | 'welcome'
     | 'observing'
@@ -33,8 +35,7 @@ export default function Home() {
     | 'reconstructing'
     | 'failed'
     | 'edit'
-  >('welcome'),
-    [editor, setEditor] = useState<Editor | null>(null);
+  >('welcome');
   const [message, setMessage] = useState(
     'Turn slowly, then show the room’s floor edges and obscured corners.',
   );
@@ -61,10 +62,8 @@ export default function Home() {
   // Registered references from the measurement sweep: pose + intrinsics from the same
   // ARFrame, so these are real keyframes rather than unregistered photographs.
   const keyframes = useRef<{ metadata: Keyframe; jpegBase64: string }[]>([]);
-  const [keyframeCount, setKeyframeCount] = useState(0);
   const clearCaptures = () => {
     keyframes.current = [];
-    setKeyframeCount(0);
   };
   useEffect(() => () => clearCaptures(), []);
   const handFrame = useRef<TrackedFrame | null>(null);
@@ -74,6 +73,24 @@ export default function Home() {
     origin = useRef<Vec3>([0, 0, 0]);
   // Drives the native prop; a ref alone would not re-render the view to deliver it.
   const [anchored, setAnchored] = useState(false);
+  /**
+   * Editing the measured room away from the measured room.
+   *
+   * A scan is finished in the room and then thought about somewhere else — on a sofa, on
+   * a train — and the live view is useless there: point the phone at a different room and
+   * the furniture is registered to walls that are not in front of you. Detaching swaps
+   * the camera for the plan and the three-quarter view, which is what the development
+   * room has always been.
+   *
+   * It is a VIEW, not a different scene. The room keeps its geometry, its edits and its
+   * `observed` provenance: relabelling a measured room as a sample to reuse that code
+   * path would be a lie about where the geometry came from, and the drawing prints that
+   * provenance on the page.
+   */
+  const [detached, setDetached] = useState(false);
+  // Read from the frame callback, which is not re-created per render.
+  const detachedRef = useRef(false);
+  detachedRef.current = detached;
   useEffect(() => () => editor?.dispose(), [editor]);
   /**
    * ONE DEVICE SESSION BUYS PERMANENT COVERAGE.
@@ -108,6 +125,9 @@ export default function Home() {
     pendingRoom.current = null;
     const created = createEditor(converted.scene);
     setEditor(created);
+    setDetached(false);
+    // Straight in. Voice comes up on its own with the editor, so the sweep ends and the
+    // room is already listening — nothing to read and nothing to dismiss in between.
     setPhase('edit');
 
     // RECONSTRUCTION RUNS BEHIND THE EDITOR, NOT IN FRONT OF IT.
@@ -153,7 +173,21 @@ export default function Home() {
     setObservedFraction(0);
     setFailure('');
     setAnchored(false);
+    setDetached(false);
     setPhase('welcome');
+  };
+  /**
+   * Start a measurement sweep, from wherever you are.
+   *
+   * `end` first, unconditionally: leaving the development room means disposing an editor
+   * and an AR anchor that belong to a scene which is about to be replaced. Reaching this
+   * from the welcome screen simply ends nothing.
+   */
+  const beginScan = () => {
+    end();
+    setSpatialOwner('RoomPlan is requesting the rear camera.');
+    setPhase('observing');
+    setMessage('Turn steadily through 270\u00b0. Keep the phone upright.');
   };
   return (
     <SafeAreaView style={styles.root}>
@@ -184,7 +218,6 @@ export default function Home() {
               const keyframe = parseKeyframe(e.nativeEvent);
               if (!keyframe) return;
               keyframes.current = [...keyframes.current, keyframe];
-              setKeyframeCount(keyframes.current.length);
             }}
             onStatus={(e) => {
               setMessage(e.nativeEvent.message);
@@ -238,7 +271,12 @@ export default function Home() {
               if (received.hand) handFrame.current = received;
               if (!frame.current || received.timestamp >= frame.current.timestamp)
                 frame.current = received;
-              editor?.engine.setTracking(received.tracking === 'normal');
+              // While detached the phone may be in another building entirely. Tracking
+              // still reports honestly, but it is no longer a statement about whether
+              // this edit can be trusted — nothing is being aligned to the camera — so
+              // it must not refuse one.
+              if (!detachedRef.current)
+                editor?.engine.setTracking(received.tracking === 'normal');
               // The pose stream IS the coverage evidence. Recording it here means the
               // completeness rules live in testable TypeScript and need no native change.
               if (scanning.current) coverage.current.observe(received);
@@ -274,76 +312,117 @@ export default function Home() {
         phase === 'needs_view' ||
         phase === 'reconstructing' ||
         phase === 'failed') && (
-        <View style={styles.panel}>
-          <Text style={styles.title}>
-            {phase === 'needs_view'
-              ? 'One more view'
-              : phase === 'failed'
-                ? 'Measurement stopped'
-                : 'Turn once for dimensions'}
-          </Text>
-          <Text style={phase === 'failed' ? styles.warn : styles.text}>
-            {phase === 'failed' ? failure : message}
-          </Text>
-          <Text style={styles.owner}>Camera: {spatialOwner}</Text>
-          <Text style={styles.owner}>{keyframeCount} registered references</Text>
-          <Text style={styles.text}>
-            Room sweep: {Math.round(Math.min(roomDegrees, roomSweepDegrees))}° / {roomSweepDegrees}°
-          </Text>
-          <Text style={styles.text}>
-            Observed: {Math.round(observedFraction * 100)}% of the room · {roomCoverage.walls}{' '}
-            walls · {roomCoverage.floors} floor · {roomCoverage.openings} openings
-          </Text>
-          {phase === 'needs_view' && pendingRoom.current && (
-            <>
-              {/* Makes the prompt actionable instead of decorative. The ARSession is
-                  retained across a re-run, so world directions - and the coverage already
-                  gathered - stay valid; only RoomPlan's own capture restarts. */}
-              <Button
-                title="Keep scanning"
+        <View style={styles.hud} pointerEvents="box-none">
+          {/* One glass card. The camera ownership line and the reference count were
+              diagnostics reading as instructions; they moved to the editor's
+              development sheet, where the people who need them already look. */}
+          <GlassPanel style={styles.card}>
+            <Text style={styles.title}>
+              {phase === 'needs_view'
+                ? 'One more view'
+                : phase === 'failed'
+                  ? 'Measurement stopped'
+                  : 'Turn once for dimensions'}
+            </Text>
+            <Text style={phase === 'failed' ? styles.warn : styles.text}>
+              {phase === 'failed' ? failure : message}
+            </Text>
+            {phase !== 'failed' && (
+              <>
+                {/* A bar, not two percentages. It is the same two numbers the sweep
+                    always reported; it is just readable while turning. */}
+                <View style={styles.track}>
+                  <View
+                    style={[
+                      styles.fill,
+                      { width: `${Math.round(Math.min(roomDegrees / roomSweepDegrees, 1) * 100)}%` },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.owner}>
+                  {Math.round(observedFraction * 100)}% observed · {roomCoverage.walls} walls ·{' '}
+                  {roomCoverage.openings} openings
+                </Text>
+              </>
+            )}
+          </GlassPanel>
+          <View style={styles.actions}>
+            {phase === 'needs_view' && pendingRoom.current && (
+              <>
+                {/* Makes the prompt actionable instead of decorative. The ARSession is
+                    retained across a re-run, so world directions - and the coverage already
+                    gathered - stay valid; only RoomPlan's own capture restarts. */}
+                <GlassPill
+                  label="Keep scanning"
+                  onPress={() => {
+                    pendingRoom.current = null;
+                    setPhase('observing');
+                    setMessage('Turn toward the boundary that is still missing.');
+                  }}
+                />
+                {/* Never a locked door: missing geometry becomes an inferred label. */}
+                <GlassPill
+                  label="Use it anyway"
+                  tone="quiet"
+                  onPress={() => pendingRoom.current && useRoom(pendingRoom.current)}
+                />
+              </>
+            )}
+            {phase === 'failed' ? (
+              <GlassPill
+                label="Try again"
                 onPress={() => {
-                  pendingRoom.current = null;
+                  setFailure('');
+                  setMessage('Turn steadily through 270°. Keep the phone upright.');
                   setPhase('observing');
-                  setMessage('Turn toward the boundary that is still missing.');
                 }}
               />
-              {/* Never a locked door: missing geometry becomes an inferred label. */}
-              <Button
-                title="Use it anyway"
-                onPress={() => pendingRoom.current && useRoom(pendingRoom.current)}
-              />
-            </>
-          )}
-          {phase === 'failed' ? (
-            <Button
-              title="Try again"
-              onPress={() => {
-                setFailure('');
-                setMessage('Turn steadily through 270°. Keep the phone upright.');
-                setPhase('observing');
-              }}
-            />
-          ) : (
-            <Button
-              title={phase === 'reconstructing' ? 'Building room…' : 'Finish now'}
-              disabled={phase === 'reconstructing'}
-              onPress={() => setPhase('reconstructing')}
-            />
-          )}
-          {__DEV__ && lastCapture.current && (
-            <Button title="Save capture as fixture" onPress={() => setMessage(saveCapture())} />
-          )}
-          <Button title="Cancel" onPress={end} />
+            ) : (
+              phase !== 'needs_view' && (
+                <GlassPill
+                  label={phase === 'reconstructing' ? 'Building room…' : 'Finish now'}
+                  disabled={phase === 'reconstructing'}
+                  onPress={() => setPhase('reconstructing')}
+                />
+              )
+            )}
+            {__DEV__ && lastCapture.current && (
+              <GlassPill label="Save fixture" tone="quiet" onPress={() => setMessage(saveCapture())} />
+            )}
+            <GlassPill label="Cancel" tone="quiet" onPress={end} />
+          </View>
         </View>
       )}
+      {/* WHY THE CAMERA IS STILL RUNNING BEHIND THIS.
+          Unmounting `SpatialView` would be the obvious way to detach, and it mints a new
+          `frameId` on the way back — `SpatialCaptureView` generates one per instance.
+          The scene was built with the old one, so every intent would then fail the
+          `context.frameId !== state.frameId` check as stale and the hand cursor would
+          refuse every frame. Covering it costs some battery and keeps the ARSession, the
+          room anchor and that id alive, so returning to the live view is instant and
+          correct rather than fast and broken. */}
+      {phase === 'edit' && detached && <View style={styles.backdrop} />}
       {phase === 'edit' && editor && (
         <EditorPanel
           editor={editor}
-          frame={editor.engine.getSnapshot().scene.provenance === 'sample' ? undefined : frame}
+          frame={
+            detached || editor.engine.getSnapshot().scene.provenance === 'sample'
+              ? undefined
+              : frame
+          }
           handFrame={handFrame}
           origin={origin.current}
           spatialOwner={spatialOwner}
           onSaveCapture={lastCapture.current ? saveCapture : undefined}
+          onScan={beginScan}
+          detached={detached}
+          onDetach={(next) => {
+            setDetached(next);
+            // Coming back, the next tracked frame restores the real answer within a
+            // frame or two; going away, nothing else would ever clear a `false` left
+            // behind by the walk out of the room.
+            if (next) editor.engine.setTracking(true);
+          }}
           reconstruction={recon}
           depthInputs={depthInputs}
           onExit={end}
@@ -351,35 +430,58 @@ export default function Home() {
       )}
       {phase === 'welcome' && (
         <View style={styles.welcome}>
-          <Text style={styles.eyebrow}>REALITY EDITOR</Text>
-          <Text style={styles.hero}>{'Make room for\nsomething new.'}</Text>
-          <Text style={styles.text}>
-            Calibrate your space, then shape it with your hands and voice.
-          </Text>
+          {/* A PICTURE HERE, A RENDER AFTER THE SCAN.
+              There is no room yet on this screen, so nothing true can be drawn — and a
+              render of a fixture pretending to be your bedroom is a worse lie than an
+              illustration that is plainly one. It was generated with the same Gemini
+              image model `POST /inpaint` uses; `npx tsx tools/hero-image.ts` makes
+              another. Its background is the page's own #0c1420, so it has no edge and
+              needs no frame around it.
+
+              It does not turn. An image model asked for the same diorama twelve degrees
+              round returns a DIFFERENT room rather than the same one from a new angle,
+              so there is no sequence to animate — only the measured room, which has
+              actual geometry, turns. */}
+          {/* Above the picture, so the whole column sits lower on the screen. */}
+          <View style={styles.topSpacer} />
+          <Image
+            source={require('../assets/hero-room.jpg')}
+            style={styles.hero}
+            resizeMode="contain"
+            accessibilityLabel="A dark cutaway view of a garage"
+          />
+          <View style={styles.pitch}>
+            {/* THE ONLY WAY IN WITHOUT A LIDAR SWEEP, AND IT IS HIDDEN ON PURPOSE.
+                The button that used to offer the sample room was removed from this
+                screen deliberately; a simulator and a phone without depth still need a
+                door, and a long-press is a door without being a button. `__DEV__` only,
+                so it does not exist in a release build. */}
+            <Pressable
+              onLongPress={
+                __DEV__
+                  ? () => {
+                      setEditor(createEditor(sampleRoom()));
+                      setPhase('edit');
+                    }
+                  : undefined
+              }
+              delayLongPress={600}
+            >
+              <Text style={styles.wordmark}>Reality Editor</Text>
+            </Pressable>
+            <Text style={styles.text}>Make room for something new.</Text>
+          </View>
+
           {/* SAY NO HERE, NOT THREE SCREENS LATER.
               Without RoomPlan there is no route to geometry at all: the Vision Camera
               sweep produces unregistered photographs, and the measure screen used to
               strand the user with nothing but Cancel after a full 300° turn. Refusing at
               the start costs them one tap instead of a minute. */}
           {spatialSupported() ? (
-            <Button
-              title="Calibrate my space"
-              onPress={() => {
-                setRoomCoverage({ walls: 0, floors: 0, openings: 0 });
-                setRoomDegrees(0);
-                coverage.current.reset();
-                setObservedFraction(0);
-                setFailure('');
-                keyframes.current = [];
-                setKeyframeCount(0);
-                // ONE TURN. The separate 300° Vision Camera pass produced references
-                // nothing consumed — read once for a count, then deleted — while
-                // RoomPlan's own sweep already emits registered keyframes as it goes.
-                setSpatialOwner('RoomPlan is requesting the rear camera.');
-                setPhase('observing');
-                setMessage('Turn steadily through 270°. Keep the phone upright.');
-              }}
-            />
+            // ONE TURN. The separate 300° Vision Camera pass produced references
+            // nothing consumed — read once for a count, then deleted — while
+            // RoomPlan's own sweep already emits registered keyframes as it goes.
+            <GlassPill label="Get started" size="large" onPress={beginScan} />
           ) : (
             <Text style={styles.warn}>
               This iPhone cannot measure a room. Calibration needs LiDAR and the native
@@ -387,15 +489,12 @@ export default function Home() {
               into metric geometry, and a room guessed from photographs is not a measurement.
             </Text>
           )}
-          {__DEV__ && (
-            <Button
-              title="Open development room"
-              onPress={() => {
-                setEditor(createEditor(sampleRoom()));
-                setPhase('edit');
-              }}
-            />
-          )}
+          {/* BELOW the buttons, not above them.
+              Bringing the sentence and the button together can move either one, and
+              moving the button up is the only version that keeps both of the things
+              asked for: the words stay around the middle of the screen, and what you
+              press sits just under them instead of at the far end of it. */}
+          <View style={styles.spacer} />
         </View>
       )}
     </SafeAreaView>
@@ -403,12 +502,103 @@ export default function Home() {
 }
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#0c1420' },
-  warn: { color: '#ffad99', fontSize: 15, lineHeight: 22 },
-  welcome: { flex: 1, justifyContent: 'center', padding: 28, gap: 24 },
-  eyebrow: { color: '#8abcee', letterSpacing: 3, fontSize: 12 },
-  hero: { color: '#fafafa', fontSize: 40, fontWeight: '600', lineHeight: 46 },
-  title: { color: 'white', fontSize: 24 },
-  text: { color: '#bac8d8', fontSize: 17, lineHeight: 25 },
-  owner: { color: '#8bd0ff', fontSize: 13 },
-  panel: { marginTop: 'auto', backgroundColor: '#111b2bea', padding: 24, gap: 16 },
+  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: '#0c1420' },
+  warn: { color: '#ffb7a6', fontSize: 15, lineHeight: 22 },
+  welcome: {
+    flex: 1,
+    alignItems: 'center',
+    padding: 24,
+    paddingTop: 14,
+    paddingBottom: 34,
+    gap: 14,
+  },
+  /**
+   * The room, as large as the screen will give it.
+   *
+   * Full bleed past the page's own padding, and the box is the PICTURE'S OWN SHAPE
+   * rather than a flexed share of what is left. A flexed box is almost never the image's
+   * aspect, so `contain` fits inside it and leaves a band of dead space above and below
+   * — which is both a smaller room and a wider gap to the sentence under it than the
+   * layout thinks it is asking for. Given the exact ratio there is no slack at all.
+   *
+   * `contain` stays, because a ratio measured from one crop should not be able to clip
+   * the next one if a regenerated hero comes back a different shape.
+   */
+  /**
+   * The room, as large as the screen will give it — and never larger.
+   *
+   * Full bleed past the page's own padding, and the box is the PICTURE'S OWN SHAPE
+   * rather than a flexed share of what is left. A flexed box is almost never the image's
+   * aspect, so `contain` fits inside it and leaves a band of dead space above and below,
+   * which is both a smaller room and a wider gap to the sentence under it.
+   *
+   * `maxHeight` is the guard that shape needs. An aspect-locked box has a height derived
+   * from the screen's WIDTH and no relationship to how much height is left; `flexShrink`
+   * is 0 by default in React Native, so on a short screen it simply keeps its size and
+   * pushes the button off the bottom. Capped, the worst case is a letterboxed picture
+   * rather than a missing button.
+   */
+  hero: {
+    // `alignSelf: stretch`, NOT `width: '100%'`. A percentage width resolves against the
+    // parent's content box, so a negative margin only slides it sideways and the picture
+    // never actually reaches the screen edges. Stretch resolves after the margins, which
+    // is what makes the bleed real.
+    alignSelf: 'stretch',
+    aspectRatio: 1338 / 1169,
+    maxHeight: '52%',
+    /**
+     * Past the screen, and further on the left than on the right.
+     *
+     * The bleed itself is what makes the picture 15% larger than a contained one: the
+     * image carries 8% of background margin of its own, so running off the edges spends
+     * that margin rather than the room.
+     *
+     * The two are not equal because the picture is not visually centred even though it
+     * is geometrically centred — the diorama's bounding box sits within 2px of the
+     * frame's middle, but the bookshelf, the monitors and the car are all on the right
+     * while the left wall is dark and empty, so the eye puts its centre right of where
+     * the measurement does. The difference between these two numbers is twice the shift:
+     * 60 and 36 moves it 12pt left.
+     *
+     * That is close to the limit. The diorama clears the left edge by 6pt at this
+     * setting, and the margins themselves are invisible — page colour on page colour —
+     * so the only thing a bigger shift costs is the room running off the side.
+     */
+    marginLeft: -60,
+    marginRight: -36,
+  },
+  /**
+   * Equal shares above the picture and below the button, so the block is centred.
+   *
+   * The picture ITSELF cannot be centred on the screen — it is more than half of it, and
+   * putting its middle on the screen's middle pushes the button off the bottom. What can
+   * be centred, and what reads as centred, is everything together.
+   */
+  topSpacer: { flex: 1 },
+  /**
+   * The air under the button rather than over it.
+   *
+   * Everything above is a fixed height, so the two spacers simply share whatever a given
+   * phone has left, half each. Measured: on a 393x852 screen the block's middle lands at
+   * 49% and the button sits 24pt under the sentence, against 104pt before. That gap is
+   * fixed, so it does not stretch on a big phone and collapse on a small one the way a
+   * proportional one would.
+   */
+  spacer: { flex: 1 },
+  pitch: { gap: 6, alignItems: 'center', paddingTop: 4, paddingBottom: 10 },
+  wordmark: { color: '#f8fbff', fontSize: 38, fontWeight: '600', letterSpacing: -0.8 },
+  title: { color: 'white', fontSize: 21, fontWeight: '600' },
+  text: { color: '#c3d2e2', fontSize: 16, lineHeight: 23, textAlign: 'center' },
+  owner: { color: '#a9dcff', fontSize: 13 },
+  hud: { marginTop: 'auto', padding: 20, paddingBottom: 34, gap: 14, alignItems: 'center' },
+  card: {
+    alignSelf: 'stretch',
+    padding: 20,
+    borderRadius: 26,
+    overflow: 'hidden',
+    gap: 10,
+  },
+  track: { height: 3, borderRadius: 2, backgroundColor: '#ffffff26', overflow: 'hidden' },
+  fill: { height: 3, borderRadius: 2, backgroundColor: '#7fc6ff' },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 10 },
 });

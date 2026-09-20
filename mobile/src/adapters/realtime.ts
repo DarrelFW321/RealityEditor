@@ -15,9 +15,21 @@ import { isAmbiguous } from '@reality/spatial-engine';
 import { recipeTool, voiceTool, VOICE_INSTRUCTIONS } from '../runtime/editor';
 import type { InputCoordinator } from '../runtime/coordinator';
 
+/**
+ * What the microphone button is currently showing.
+ *
+ * `hearing` is the one the user asked for — proof the app can tell they are talking,
+ * rather than a button that looks identical whether or not anything is getting through.
+ * It comes from the server's own voice-activity detection, which is the same signal that
+ * decides a turn has started, so the icon cannot disagree with what the model heard.
+ */
+export type VoiceActivity = 'offline' | 'connecting' | 'muted' | 'listening' | 'hearing' | 'thinking' | 'replying';
+
 export class RealtimeVoice implements VoiceAdapter {
   readonly id = 'openai-realtime-webrtc';
   readonly capabilities = ['audio', 'edit-tools'];
+  private muted = false;
+  private activity: VoiceActivity = 'offline';
   private peer: RTCPeerConnection | null = null;
   private channel: RTCDataChannel | null = null;
   private stream: MediaStream | null = null;
@@ -34,7 +46,36 @@ export class RealtimeVoice implements VoiceAdapter {
     private diagnostics: DiagnosticSink,
     private input: InputCoordinator,
     private status: (message: string) => void,
+    /** Drives the microphone icon. Optional so nothing existing has to supply it. */
+    private onActivity: (activity: VoiceActivity) => void = () => {},
   ) {}
+  private setActivity(next: VoiceActivity) {
+    // A muted microphone outranks everything the connection has to say: the icon must
+    // never animate as though it were hearing someone while the track is disabled.
+    const resolved = this.muted && next !== 'offline' && next !== 'connecting' ? 'muted' : next;
+    if (resolved === this.activity) return;
+    this.activity = resolved;
+    this.onActivity(resolved);
+  }
+  /**
+   * Stop sending audio, without tearing the session down.
+   *
+   * Disabling the track rather than stopping it keeps the peer connection, the tools and
+   * the conversation alive — WebRTC goes on sending silence, so the server's voice
+   * detection simply never fires and no turn opens. Stopping the track instead would
+   * free the hardware and require a full renegotiation to come back, which is a
+   * reconnect, not a mute.
+   */
+  setMuted(muted: boolean) {
+    this.muted = muted;
+    this.stream?.getAudioTracks().forEach((track) => {
+      track.enabled = !muted;
+    });
+    this.setActivity(muted ? 'muted' : 'listening');
+  }
+  isMuted() {
+    return this.muted;
+  }
   /** Retained for the `VoiceAdapter` port. The coordinator owns interaction state now,
    * so there is nothing to copy in: this used to be a per-frame deep clone whose only
    * readers were the two turn-boundary handlers. */
@@ -46,6 +87,7 @@ export class RealtimeVoice implements VoiceAdapter {
     if (this.peer) throw new Error('Voice already active');
     const controller = new AbortController();
     this.controller = controller;
+    this.setActivity('connecting');
     const timeout = setTimeout(() => controller.abort(), 30_000);
     try {
       const response = await fetch(`${this.apiURL}/voice/session`, {
@@ -100,6 +142,9 @@ export class RealtimeVoice implements VoiceAdapter {
         return;
       }
       this.stream = stream;
+      // Mute can be pressed while the session is still negotiating; the track it needs
+      // to disable did not exist then, so the decision is reapplied now.
+      if (this.muted) stream.getAudioTracks().forEach((track) => { track.enabled = false; });
       const peer = new RTCPeerConnection();
       this.peer = peer;
       stream.getTracks().forEach((track) => peer.addTrack(track, stream));
@@ -126,7 +171,8 @@ export class RealtimeVoice implements VoiceAdapter {
             instructions: VOICE_INSTRUCTIONS,
           },
         });
-        this.status('Voice connected. Point, then speak.');
+        this.status('Listening.');
+        this.setActivity('listening');
       };
       channel.onmessage = (event: { data: unknown }) => {
         try {
@@ -191,6 +237,7 @@ export class RealtimeVoice implements VoiceAdapter {
       const turnId = String(event.item_id);
       this.speechTurn = turnId;
       const record = this.input.openTurn(turnId);
+      this.setActivity('hearing');
       this.diagnostics.emit({
         timestamp: Date.now(),
         stage: 'voice',
@@ -200,10 +247,12 @@ export class RealtimeVoice implements VoiceAdapter {
         targetId: record.selectedId ?? undefined,
       });
     }
-    if (event.type === 'input_audio_buffer.speech_stopped' && this.speechTurn)
+    if (event.type === 'input_audio_buffer.speech_stopped' && this.speechTurn) {
       // The destination is sealed here: it may move while the user is still speaking,
       // but not after they stop.
       this.input.sealTurn(this.speechTurn);
+      this.setActivity('thinking');
+    }
     if (event.type === 'input_audio_buffer.committed') {
       const turnId = this.speechTurn;
       if (turnId) this.input.sealTurn(turnId);
@@ -290,8 +339,15 @@ export class RealtimeVoice implements VoiceAdapter {
       this.send({ type: 'response.create' });
       this.status(result.message);
     }
-    if (event.type === 'error')
+    // Audio coming back is the only reliable sign the model has started answering;
+    // `response.created` only means it accepted the request.
+    if (event.type === 'response.output_audio.delta' || event.type === 'response.audio.delta')
+      this.setActivity('replying');
+    if (event.type === 'response.done') this.setActivity('listening');
+    if (event.type === 'error') {
       this.status('Voice service reported an error. Reconnect if it persists.');
+      this.setActivity('listening');
+    }
   }
   async stop() {
     this.controller?.abort();
@@ -305,6 +361,7 @@ export class RealtimeVoice implements VoiceAdapter {
     this.stream = null;
     this.speechTurn = null;
     this.awaitingResponseFor = null;
+    this.setActivity('offline');
     // Every turn opened by this connection is now obsolete. A tool call still in flight
     // cannot commit against the next connection's state.
     this.input.invalidate();
