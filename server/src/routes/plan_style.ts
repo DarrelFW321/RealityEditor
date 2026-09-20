@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { config, missingKeyResponse } from "../config.js";
 import { strictJsonSchema } from "../openai-json.js";
-import { loadManifest, filterByFreeSpace } from "../catalog.js";
+import { loadManifest, loadGeneratedEntries, filterByFreeSpace } from "../catalog.js";
 import { OpCoreSchema, type OpCore } from "../contracts.js";
 
 /**
@@ -128,7 +128,11 @@ export async function registerPlanStyleRoute(app: FastifyInstance) {
     // measured free space, so it cannot pick a sectional the room cannot hold.
     // Enforced by the input, not by asking the model nicely in the prompt.
     const manifest = loadManifest();
-    const fits = filterByFreeSpace(manifest.entries, room.largest_open_rect);
+    // Both catalogues: the shipped USDZ assets and anything generated. They are
+    // separate files with separate schemas, and the planner should not care which
+    // a given object came from — only whether it fits.
+    const everything = [...manifest.entries, ...loadGeneratedEntries()];
+    const fits = filterByFreeSpace(everything, room.largest_open_rect);
 
     const known = new Set<string>([
       ...room.objects.map((o) => o.id),
@@ -163,6 +167,10 @@ export async function registerPlanStyleRoute(app: FastifyInstance) {
         },
         body: JSON.stringify({
           model: config.planner.model,
+          // Held low, as the Anthropic call was: this is a taste call against a
+          // constrained schema, not a reasoning problem, and every extra second
+          // is animation the user watches instead of their room.
+          reasoning_effort: config.planner.effort,
           messages: [
             { role: "system", content: system },
             {

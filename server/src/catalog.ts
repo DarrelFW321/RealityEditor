@@ -43,6 +43,55 @@ export function loadManifest(): Manifest {
   return cached;
 }
 
+const GENERATED_MANIFEST = join(here, "..", "..", "catalog", "generated", "manifest.json");
+
+/**
+ * Generated objects, in the shape the planner already understands.
+ *
+ * They live in a separate manifest with a different schema, so without this the
+ * planner cannot see them — it reported "no plant items are available" while a
+ * generated potted plant sat on disk.
+ */
+export interface PlannerCandidate {
+  id: string;
+  class: string;
+  style_tags: string[];
+  dims_m: { w: number; h: number; d: number };
+}
+
+export function loadGeneratedEntries(): PlannerCandidate[] {
+  let raw: string;
+  try {
+    raw = readFileSync(GENERATED_MANIFEST, "utf8");
+  } catch {
+    return [];
+  }
+  try {
+    const manifest = JSON.parse(raw) as {
+      entries?: {
+        id: string;
+        status: string;
+        category: string;
+        dimensionsM?: { width: number; height: number; depth: number };
+        materialFamily?: string;
+        size?: string;
+      }[];
+    };
+    return (manifest.entries ?? [])
+      .filter((e) => e.status === "complete" && e.dimensionsM)
+      .map((e) => ({
+        id: e.id,
+        class: e.category,
+        // Style tags drive the planner's aesthetic matching; these are honest but
+        // coarse, since a generated object has a material and a size and no styling.
+        style_tags: [e.materialFamily, e.size].filter((t): t is string => Boolean(t)),
+        dims_m: { w: e.dimensionsM!.width, h: e.dimensionsM!.height, d: e.dimensionsM!.depth },
+      }));
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Drops every catalog entry that cannot physically fit the measured free space.
  *
@@ -57,11 +106,11 @@ export function loadManifest(): Manifest {
  * An entry survives if its footprint fits inside `largest_open_rect` in either
  * orientation, with `clearance` of walking room on each side.
  */
-export function filterByFreeSpace(
-  entries: CatalogEntry[],
+export function filterByFreeSpace<T extends { dims_m: { w: number; d: number } }>(
+  entries: T[],
   openRect: { size: [number, number] },
   clearance = 0.61,
-): CatalogEntry[] {
+): T[] {
   const availW = openRect.size[0] - clearance;
   const availD = openRect.size[1] - clearance;
   return entries.filter((e) => {

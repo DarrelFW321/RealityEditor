@@ -92,6 +92,8 @@ export const config = {
     model: process.env.PLANNER_MODEL ?? "gpt-5.5-2026-04-23",
     url: "https://api.openai.com/v1/chat/completions",
     maxOps: 12,
+    /** "minimal" is rejected by this model; "low" zeroes the reasoning tokens. */
+    effort: process.env.PLANNER_EFFORT ?? "low",
     /** Generous: it is off the critical path, behind a "thinking" animation. */
     timeoutMs: Number(process.env.PLANNER_TIMEOUT_MS ?? 60_000),
   },
