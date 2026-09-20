@@ -1,0 +1,215 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "tall-shelving-unit",
+      "status": "complete",
+      "category": "shelving_unit",
+      "size": "large",
+      "materialFamily": "wood",
+      "baseFinish": "pale oak",
+      "tintable": true,
+      "keywords": [
+        "freestanding",
+        "tall"
+      ],
+      "structure": {
+        "compartmentCount": 4
+      },
+      "dimensionsM": {
+        "width": 1.2,
+        "height": 1.8,
+        "depth": 0.35
+      },
+      "label": "a tall freestanding shelving unit with four empty compartments, pale oak, mid-century modern",
+      "prompt": "a tall freestanding shelving unit with four empty compartments, pale oak, mid-century modern, EXACTLY 4 compartments arranged as two columns by two rows, no additional compartments or dividers, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "pale natural oak, fine straight grain, matte clear finish, photoreal physically based material on a shelving unit, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "97d38998864a19ff6f8845fa73de9f6a6c74300dabd97018b86047182470e670",
+      "file": "assets/97d38998864a19ff6f8845fa73de9f6a6c74300dabd97018b86047182470e670.glb",
+      "meshy": {
+        "previewTaskId": "01a0bc9a-841d-72af-95cc-f31e1c87207e",
+        "credits": 30,
+        "refineTaskId": "01a0bc9b-7339-7167-a0c0-594d55444061",
+        "builtAt": "2026-09-20T02:19:18.866Z"
+      },
+      "bytes": 8495444,
+      "triangles": 36129,
+      "textures": 3
+    },
+    {
+      "id": "oak-dining-chair",
+      "status": "complete",
+      "category": "chair",
+      "size": "medium",
+      "materialFamily": "wood",
+      "baseFinish": "pale oak",
+      "tintable": true,
+      "keywords": [
+        "dining",
+        "spindle"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 0.5,
+        "height": 0.85,
+        "depth": 0.55
+      },
+      "label": "a pale oak dining chair with a spindle back and four straight legs",
+      "prompt": "a pale oak dining chair with a spindle back and four straight legs, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "pale natural oak, fine straight grain, matte clear finish, photoreal physically based material on a chair, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "23c4eb8ada2b9e052daa7f1aae264c96b1598c807b02b80aa437e0356ff1abd7",
+      "file": "assets/23c4eb8ada2b9e052daa7f1aae264c96b1598c807b02b80aa437e0356ff1abd7.glb",
+      "meshy": {
+        "previewTaskId": "01a0bc9c-5c00-77c7-a7e6-adec4c71444f",
+        "credits": 30,
+        "refineTaskId": "01a0bc9d-47b3-72d2-88af-00075dd0834a",
+        "builtAt": "2026-09-20T02:21:13.867Z"
+      },
+      "bytes": 8311712,
+      "triangles": 46847,
+      "textures": 3
+    },
+    {
+      "id": "rectangular-dining-table",
+      "status": "complete",
+      "category": "table",
+      "size": "large",
+      "materialFamily": "wood",
+      "baseFinish": "pale oak",
+      "tintable": true,
+      "keywords": [
+        "rectangular",
+        "dining"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 1.8,
+        "height": 0.75,
+        "depth": 0.9
+      },
+      "label": "a large rectangular pale oak dining table with four straight legs",
+      "prompt": "a large rectangular pale oak dining table with four straight legs, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "pale natural oak, fine straight grain, matte clear finish, photoreal physically based material on a table, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "5e0c0b7a62580e3ac926b6ec039a772aa1726a15f243b787c8a58fc14cefcd4a",
+      "file": "assets/5e0c0b7a62580e3ac926b6ec039a772aa1726a15f243b787c8a58fc14cefcd4a.glb",
+      "meshy": {
+        "previewTaskId": "01a0bc9e-1d3a-7362-80a5-7349910ae566",
+        "credits": 30,
+        "refineTaskId": "01a0bc9f-6444-737b-9154-1d854777d985",
+        "builtAt": "2026-09-20T02:23:33.082Z"
+      },
+      "bytes": 7940032,
+      "triangles": 38630,
+      "textures": 3
+    },
+    {
+      "id": "round-coffee-table",
+      "status": "complete",
+      "category": "coffee_table",
+      "size": "medium",
+      "materialFamily": "wood",
+      "baseFinish": "pale oak",
+      "tintable": true,
+      "keywords": [
+        "round",
+        "tapered"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 1,
+        "height": 0.42,
+        "depth": 0.55
+      },
+      "label": "a round pale oak coffee table with three tapered legs",
+      "prompt": "a round pale oak coffee table with three tapered legs, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "pale natural oak, fine straight grain, matte clear finish, photoreal physically based material on a coffee table, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "721aa7cfa56c8ee8e30556c59f53b5fbc7fa9d4acadc2193b207a0923174b241",
+      "file": "assets/721aa7cfa56c8ee8e30556c59f53b5fbc7fa9d4acadc2193b207a0923174b241.glb",
+      "meshy": {
+        "previewTaskId": "01a0bca0-3d08-7083-8edc-f3febee86456",
+        "credits": 30,
+        "refineTaskId": "01a0bca1-8ac9-743a-90ed-b06dca48df18",
+        "builtAt": "2026-09-20T02:25:55.054Z"
+      },
+      "bytes": 8721596,
+      "triangles": 48001,
+      "textures": 3
+    },
+    {
+      "id": "two-door-cabinet",
+      "status": "complete",
+      "category": "cabinet",
+      "size": "medium",
+      "materialFamily": "wood",
+      "baseFinish": "pale oak",
+      "tintable": true,
+      "keywords": [
+        "two doors",
+        "tapered"
+      ],
+      "structure": {
+        "compartmentCount": 2
+      },
+      "dimensionsM": {
+        "width": 0.9,
+        "height": 1.2,
+        "depth": 0.42
+      },
+      "label": "a pale oak cabinet with two doors on tapered legs",
+      "prompt": "a pale oak cabinet with two doors on tapered legs, EXACTLY 2 doors, no additional doors or dividers, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "pale natural oak, fine straight grain, matte clear finish, photoreal physically based material on a cabinet, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "fd50c1184442d0559d64d51e9b01115ea5891ebb60ff9bcac0ce773fe260b0f2",
+      "file": "assets/fd50c1184442d0559d64d51e9b01115ea5891ebb60ff9bcac0ce773fe260b0f2.glb",
+      "meshy": {
+        "previewTaskId": "01a0bca2-679d-7412-b62e-e871f046a79c",
+        "credits": 30,
+        "refineTaskId": "01a0bca3-b822-77fa-987f-9a9fe3b11f89",
+        "builtAt": "2026-09-20T02:28:27.356Z"
+      },
+      "bytes": 7683012,
+      "triangles": 42506,
+      "textures": 3
+    },
+    {
+      "id": "linen-armchair",
+      "status": "complete",
+      "category": "armchair",
+      "size": "medium",
+      "materialFamily": "fabric",
+      "baseFinish": "natural linen",
+      "tintable": true,
+      "keywords": [
+        "lounge",
+        "mid-century"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 0.78,
+        "height": 0.82,
+        "depth": 0.82
+      },
+      "label": "a mid-century lounge armchair upholstered in undyed natural linen with pale wooden legs",
+      "prompt": "a mid-century lounge armchair upholstered in undyed natural linen with pale wooden legs, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "undyed natural linen weave, fine even texture, photoreal physically based material on a armchair, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "09417ac8789d63011688301d008c7fd76feaa5db5132994ccafb0f10dafbae9b",
+      "file": "assets/09417ac8789d63011688301d008c7fd76feaa5db5132994ccafb0f10dafbae9b.glb",
+      "meshy": {
+        "previewTaskId": "01a0bca4-ba8a-72ab-82ad-7b68973d55d7",
+        "credits": 30,
+        "refineTaskId": "01a0bca5-dd1e-7285-9365-d5510f0a3de7",
+        "builtAt": "2026-09-20T02:30:42.575Z"
+      },
+      "bytes": 10981404,
+      "triangles": 47496,
+      "textures": 3
+    }
+  ]
+}

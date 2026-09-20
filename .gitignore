@@ -36,3 +36,8 @@ workers/reconstruction/__pycache__/
 # Furniture worker: downloaded weights, environments, generated assets, and trials.
 workers/furniture/.local/
 workers/furniture/.venv/
+
+# Generated catalog GLBs are committed so a clone is self-contained: the manifest
+# references them by hash, and a missing file is a 404 at demo time. ~4MB each.
+# `.objects/` is per-request scratch from live generation and is not committed.
+.objects/

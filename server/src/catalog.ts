@@ -7,6 +7,11 @@ import { z } from "zod";
 const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = join(here, "..", "..", "catalog", "manifest.json");
 
+/** PBR texture sets: one directory per material id, each holding these three maps. */
+export const MATERIALS_DIR = join(here, "..", "..", "catalog", "materials");
+export const MATERIAL_MAPS = ["diff", "nor_gl", "rough"] as const;
+export type MaterialMap = (typeof MATERIAL_MAPS)[number];
+
 export const CatalogEntrySchema = z.object({
   id: z.string(),
   class: z.string(),

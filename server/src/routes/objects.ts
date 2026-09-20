@@ -1,7 +1,11 @@
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { interpretPrompt } from '@reality/object-spec';
 import { ObjectStore } from '../objects/store.js';
+import { loadManifest, MATERIAL_MAPS, MATERIALS_DIR, type MaterialMap } from '../catalog.js';
 
 const Prompt = z.object({ prompt: z.string().min(3).max(1000) }).strict();
 
@@ -53,6 +57,34 @@ export async function registerObjectRoutes(app: FastifyInstance, store: ObjectSt
     const data = Prompt.safeParse(request.body);
     if (!data.success) return reply.code(400).send({ error: 'invalid_prompt' });
     return reply.send({ spec: interpretPrompt(data.data) });
+  });
+
+  /**
+   * PBR material sets for procedurally-built geometry, which otherwise renders as
+   * flat colour. Only materials with textures on disk are listed; the paint ids in
+   * the manifest are colour-only and have no maps.
+   */
+  app.get('/objects/materials', async () => ({
+    materials: loadManifest().materials.map((material) => ({
+      id: material.id,
+      baseColorHex: material.base_color_hex,
+      styleTags: material.style_tags,
+      maps: MATERIAL_MAPS.filter((map) => existsSync(join(MATERIALS_DIR, material.id, `${map}.jpg`))),
+    })),
+  }));
+
+  app.get<{ Params: { id: string; map: string } }>('/objects/materials/:id/:map', async (request, reply) => {
+    const map = request.params.map.replace(/\.jpg$/, '') as MaterialMap;
+    // Allowlisted on both segments: these become a filesystem path.
+    if (!/^mat_[a-z0-9_]+$/.test(request.params.id) || !MATERIAL_MAPS.includes(map)) {
+      return reply.code(404).send({ error: 'material_not_found' });
+    }
+    try {
+      const bytes = await readFile(join(MATERIALS_DIR, request.params.id, `${map}.jpg`));
+      return reply.code(200).header('cache-control', IMMUTABLE).type('image/jpeg').send(bytes);
+    } catch {
+      return reply.code(404).send({ error: 'material_not_found' });
+    }
   });
 
   app.get<{ Params: { file: string } }>('/objects/assets/:file', async (request, reply) => {
