@@ -25,10 +25,13 @@ between someone stopping talking and the furniture moving.
 Three consequences worth internalising before you write anything:
 
 - **The phone is authoritative for geometry.** Scene graph, constraint solving,
-  deixis resolution, and rendering all run on-device. Geometry never
-  round-trips to a server. Not once.
-- **The server is authoritative for nothing on the critical path.** It has two
-  endpoints: mint a voice token, expand a style theme. That is the whole backend.
+  deixis resolution, and rendering all run on-device. No pose is ever computed
+  off-device. The server serves asset *bytes* — meshes and textures — and
+  measures nothing.
+- **The server is authoritative for nothing on the critical path.** It mints a
+  voice token, expands a style theme, serves catalog meshes and PBR materials,
+  and runs generation and room reconstruction. Every one of those either happens
+  before a turn starts or falls back to something local when it fails.
 - **Ops carry intent, never coordinates.** The model emits
   `{target, relation, anchor}` because it cannot see. The client's solver
   computes the pose.
@@ -60,6 +63,25 @@ them.
 > frozen is the *set of interfaces*, not their contents.
 
 ---
+
+## Where furniture comes from
+
+Three sources. The solver cannot tell them apart, because all three reduce to
+bounds in metres before it sees them.
+
+| Source | Cost | What it gives you |
+|---|---|---|
+| **Authored templates** | free, instant | Five families built from boxes, parametric in any dimension. Wears a real PBR material, so a box reads as oak rather than as a swatch. |
+| **Catalog** | free at runtime | Pre-built textured meshes for everything the templates cannot express — sofas, lamps, statues, plants. Matched on category, size, material and counted features. |
+| **Text-to-3D** | ~30 credits, ~90s | Anything else. Geometry lands first and appears untextured while the material stage is still running. |
+
+A prompt is matched against the catalog first and only reaches generation when
+nothing fits. What the matcher will **not** do is substitute: ask for six
+compartments and get four and it says no, because the audience can count.
+
+Where no asset exists at all, an authored box stands in — but only where a box
+is honest. A sofa becomes a frame in real linen and the substitution is said out
+loud. A lamp or a statue, where the silhouette *is* the object, is refused.
 
 ## Setup
 
@@ -208,8 +230,13 @@ Every one of these is a real temptation. Every one is wrong for this repo.
 
 - **A database.** Persistence is P1 and invisible on stage. The op log is a local
   `.jsonl`.
-- **A catalogue service.** Static manifest, assets bundled in the app. A network
-  fetch when the sofa appears is a 400ms hitch and a live failure mode.
+- ~~**A catalogue service.** Static manifest, assets bundled in the app. A network
+  fetch when the sofa appears is a 400ms hitch and a live failure mode.~~
+  **Reversed.** Generated meshes are ~8MB each and the catalog is over 150MB, which
+  is not bundleable. The 400ms fear did not survive measurement either: ten
+  concurrent 7.4MB fetches complete in 10ms over LAN. It is not a hard failure
+  mode because a failed fetch falls back to the authored box, so the object still
+  appears. Materials are served the same way and cached per id for the app's life.
 - **A WebSocket op channel to your own server.** Ops arrive on the model
   connection. The server is not in the op path.
 - **Auth, accounts, onboarding.** Anonymous device identity. No login.
@@ -226,11 +253,19 @@ contracts/          JSON Schema — the single source of truth
   schema/           the five contracts
   fixtures/         sample rooms, SCPs, and a recorded session
   codegen.sh        schema -> Swift + TypeScript
-ios/
-  SpatialCore/      Swift package. Pure geometry. NO ARKit/RealityKit, ever.
-  RealityEditor/    the app target
-server/             Fastify. Two routes. Not in the op path.
-catalog/            bundled USDZ + materials + manifest
-spectator/          Three.js mirror — scaffold only, hour 23
+mobile/             Expo app. Scene graph, solver, renderer, voice loop.
+packages/
+  spatial-engine/   collisions, clearances, door swings, layout planning
+  scene-recipes/    the five authored templates
+  object-spec/      prompt -> typed spec, and catalog matching
+  contracts/        generated TypeScript types
+server/             Fastify. Voice token, style planner, objects, reconstruction.
+  src/objects/      generation, GLB validation, serve-time tinting
+workers/            Python. Segmentation and inpainting for removal.
+catalog/            USDZ + PBR materials + manifest
+  generated/        text-to-3D meshes, committed so a clone is self-contained
+scripts/            catalog build, resumable and abortable on spend
+spikes/             experiments wired into nothing; delete freely
+ios/                the original Swift app, superseded by mobile/
 tools/              fixture generation, validation, git hooks
 ```
