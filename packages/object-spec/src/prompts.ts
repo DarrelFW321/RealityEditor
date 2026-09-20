@@ -43,6 +43,7 @@ const NEUTRAL_BASE: Readonly<Record<string, string>> = Object.freeze({
   plastic: 'matte off-white moulded plastic',
   glass: 'clear colourless glass',
   stone: 'pale honed marble, fine natural veining, matte finish',
+  foliage: 'fresh green leaves, natural matte leaf surface, subtle veining',
   matte: 'light warm grey matte surface',
 });
 

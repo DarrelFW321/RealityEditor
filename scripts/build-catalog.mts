@@ -95,7 +95,7 @@ async function main() {
       size: spec.size,
       materialFamily: material.family,
       baseFinish: object.baseFinish,
-      tintable: true,
+      tintable: object.tintable ?? true,
       keywords: [...object.keywords],
       structure: { compartmentCount: spec.structure.compartmentCount },
       dimensionsM: spec.dimensionsM ?? undefined,
