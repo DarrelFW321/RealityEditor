@@ -10,6 +10,7 @@ import {
 } from '@reality/spatial-engine';
 import { buildObject, revalidate } from '@reality/scene-recipes';
 import { catalogEntry } from './object-catalog';
+import { expandLegacyPlan, type LegacyPlan } from './legacy-style';
 import {
   RecipeSchema,
   SceneRecipeSchema,
@@ -275,6 +276,19 @@ function templateFor(category: string): 'bed' | 'table' | 'frame' | 'shelf' | 'c
   return CATALOG_TEMPLATE[category] ?? 'cabinet';
 }
 
+/** A label and nothing else: "make this a warm scandinavian living room". */
+function bareTheme(input: unknown): string | null {
+  if (!input || typeof input !== 'object') return null;
+  const fields = input as Record<string, unknown>;
+  const label = typeof fields.label === 'string' ? fields.label.trim() : '';
+  if (!label) return null;
+  const asks = ['items', 'wall_color', 'floor_color', 'object_color', 'hide_ids', 'replace_ids'].some((key) => {
+    const value = fields[key];
+    return Array.isArray(value) ? value.length > 0 : value !== undefined;
+  });
+  return asks ? null : label;
+}
+
 export const voiceTool = {
   type: 'function',
   name: 'edit_room',
@@ -288,7 +302,7 @@ export const recipeTool = {
   type: 'function',
   name: 'restyle_room',
   description:
-    'Create or restyle a whole arrangement from a description, e.g. "a blue bedroom with three frames on that wall". Supply only families, counts and named surfaces from the context — never coordinates. The device plans the layout, checks it against the real room and reports back. If the result asks for confirmation, repeat the call is wrong: call edit_room with action "confirm" once the user agrees.',
+    'Create or restyle a whole arrangement from a description, e.g. "a blue bedroom with three frames on that wall". Supply only families, counts and named surfaces from the context — never coordinates. To furnish a room in a style without choosing the pieces — "make this a warm scandinavian living room" — send the label alone and omit items: the device asks the server to pick from the catalogue of things that physically fit, which is the only way real furniture models rather than plain shapes get placed. The device plans the layout, checks it against the real room and reports back. If the result asks for confirmation, repeat the call is wrong: call edit_room with action "confirm" once the user agrees.',
   parameters: toolSchema(RecipeIntentSchema),
 };
 
@@ -399,10 +413,17 @@ export function nextMaskId(state: EditorState): string {
 export interface EditorModules {
   createSettling: () => SettlingAdapter;
   buildObject: typeof buildObject;
+  /**
+   * Furnishes a room from a theme, server-side, against the fitting catalogue.
+   * Injected because the real one reaches the network and this module is loaded
+   * by the Node gate; the default declines, exactly as an offline server does.
+   */
+  requestStylePlan: (state: EditorState, theme: string) => Promise<LegacyPlan | null>;
 }
 export const defaultEditorModules: EditorModules = {
   createSettling: () => new FloorSettlingAdapter(),
   buildObject,
+  requestStylePlan: async () => null,
 };
 
 /** Something the app does, as opposed to something the room does. */
@@ -1112,7 +1133,25 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
       conflicts: [],
       revision: state.revision,
     });
-    const parsed = RecipeIntentSchema.safeParse(input);
+    // A bare theme cannot satisfy the "must change something" rule, so it is resolved
+    // into a real arrangement BEFORE parsing. Only the server can answer it: it holds
+    // the catalogue and filters it to what fits, so this is the one path that places
+    // real meshes rather than boxes.
+    const plannerCaveats: string[] = [];
+    let request = input;
+    const theme = bareTheme(input);
+    if (theme) {
+      onStage?.('planning');
+      const plan = await modules.requestStylePlan(state, theme);
+      if (!plan) return reject('I could not reach the room planner. Tell me what to add instead.', 'invalid_parameters');
+      const expansion = expandLegacyPlan(state, plan);
+      request = expansion.recipe;
+      // Disclosed, never silent: approximations and refusals both reach the user.
+      for (const a of expansion.approximated) plannerCaveats.push(a.reason);
+      for (const sk of expansion.skipped) plannerCaveats.push(`Skipped: ${sk.reason}`);
+    }
+
+    const parsed = RecipeIntentSchema.safeParse(request);
     if (!parsed.success) return reject('I did not understand that arrangement.', 'invalid_parameters');
     if (context.frameId !== state.frameId || context.revision !== state.revision)
       return reject('The room changed since that instruction. Please repeat it.', 'stale_revision');
@@ -1153,7 +1192,11 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
         state.measured.objects.some((o) => o.id === hidden),
       ),
     });
-    return propose(recipe, context, id, onStage);
+    const outcome = await propose(recipe, context, id, onStage);
+    // Part of the answer, not a detail of how it was produced.
+    return plannerCaveats.length
+      ? { ...outcome, caveats: [...outcome.caveats, ...plannerCaveats] }
+      : outcome;
   }
 
   return {

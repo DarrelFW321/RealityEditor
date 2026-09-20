@@ -29,6 +29,9 @@ export type LegacyOp = {
 
 export type LegacyPlan = { summary: string; ops: LegacyOp[] };
 
+/** RecipeIntentSchema's own cap. Exceeding it rejects the arrangement outright. */
+const MAX_ITEMS = 6;
+
 export type Expansion = {
   recipe: RecipeIntent;
   /**
@@ -155,6 +158,13 @@ export function expandLegacyPlan(scene: EditorState, plan: LegacyPlan): Expansio
       // the legacy vocabulary gives a relation and never a pose, so the position has to
       // be computed here regardless.
       replaceIds.push(op.target_id);
+    }
+    // RecipeIntent carries at most six items, while a plan may hold twelve ops.
+    // Overflowing would fail the whole arrangement's safeParse, losing a usable
+    // plan entirely, so the tail is reported as skipped like any other op.
+    if (items.length >= MAX_ITEMS) {
+      skipped.push({ op, reason: `only the first ${MAX_ITEMS} placements fit one arrangement` });
+      continue;
     }
     touched.add(op.target_id);
     const existing = scene.design.objects.find((o) => o.id === op.target_id);

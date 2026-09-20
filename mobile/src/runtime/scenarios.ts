@@ -22,7 +22,7 @@ import { roomToSession } from '../adapters/room-conversion';
 import { applyToPoint, roomFromWorld } from '../adapters/room-space';
 import type { EditorState, EditResult, InteractionContext, Vec3 } from '@reality/contracts';
 import { setObjectCatalog } from './object-catalog';
-import { createEditor, type Editor } from './editor';
+import { createEditor, defaultEditorModules, type Editor } from './editor';
 import { compositingScenarios } from './compositing-scenarios';
 import { InputCoordinator, DESTINATION_MAX_AGE_MS } from './coordinator';
 import { buildOccupancy, buildScp, isAmbiguous, largestOpenRect } from '@reality/spatial-engine';
@@ -201,6 +201,66 @@ export const scenarios: Scenario[] = [
           'no hard violations were reported',
           (result.report?.violations_resolved.length ?? 0) === 0,
           `${result.report?.violations_resolved.length ?? 0} violations, ${result.report?.remaining_notes.length ?? 0} notes`,
+        ),
+      ];
+    },
+  },
+  {
+    id: 'restyle-server-plan',
+    title: 'A theme with no items is furnished by the server, and says what it did',
+    milestone: 'M7',
+    gate: 'placement',
+    scene: sampleRoom,
+    run: async () => {
+      // A fixed plan stands in for the server: what is under test is the routing
+      // and the disclosure, not the planner's taste.
+      const planned = createEditor(sampleRoom(), {
+        ...defaultEditorModules,
+        requestStylePlan: async () => ({
+          summary: 'warm scandinavian',
+          ops: [
+            { type: 'CHANGE_COLOR' as const, target_id: 'srf_wall_north', color_hex: '#e8e4dc' },
+            { type: 'ADD_OBJECT' as const, target_id: 'obj_new_shelf', catalog_id: 'cat_shelves_display_01' },
+            { type: 'ADD_OBJECT' as const, target_id: 'obj_new_sofa', catalog_id: 'cat_sofa_linen_03' },
+            { type: 'ADD_OBJECT' as const, target_id: 'obj_new_plant', catalog_id: 'cat_plant_fern_01' },
+          ],
+        }),
+      });
+      const withPlanner = await planned.restyle(
+        { label: 'warm scandinavian living room' },
+        context(planned, onFloor(planned, [0, 0, -1.2])),
+        'server-restyle',
+      );
+
+      // The same request with no reachable planner must fail honestly rather than
+      // silently doing nothing, since a bare theme cannot parse on its own.
+      const offline = createEditor(sampleRoom(), defaultEditorModules);
+      const withoutPlanner = await offline.restyle(
+        { label: 'warm scandinavian living room' },
+        context(offline, onFloor(offline, [0, 0, -1.2])),
+        'offline-restyle',
+      );
+
+      return [
+        check(
+          'a bare theme is furnished rather than refused',
+          withPlanner.status !== 'rejected',
+          describe(withPlanner),
+        ),
+        check(
+          'the sofa approximation is disclosed to the user',
+          withPlanner.caveats.some((c) => /placed as an authored/.test(c)),
+          withPlanner.caveats.join(' | ') || 'no caveats',
+        ),
+        check(
+          'the plant, which no box represents, is reported as skipped',
+          withPlanner.caveats.some((c) => /Skipped:/.test(c)),
+          withPlanner.caveats.filter((c) => /Skipped:/.test(c)).join(' | ') || 'nothing skipped',
+        ),
+        check(
+          'an unreachable planner says so instead of failing silently',
+          withoutPlanner.status === 'rejected' && /room planner/.test(withoutPlanner.message),
+          describe(withoutPlanner),
         ),
       ];
     },

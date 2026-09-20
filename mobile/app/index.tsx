@@ -7,6 +7,8 @@ import { sampleRoom } from '@reality/dev-scenarios';
 import { EditorPanel } from '../src/components/EditorPanel';
 import { createEditor, type Editor } from '../src/runtime/editor';
 import { loadObjectCatalog } from '../src/adapters/object-catalog';
+import { requestStylePlan } from '../src/adapters/plan-style';
+import { defaultEditorModules } from '../src/runtime/editor';
 import {
   SpatialView,
   spatialSupported,
@@ -127,7 +129,7 @@ export default function Home() {
     origin.current = converted.origin;
     setAnchored(true);
     pendingRoom.current = null;
-    const created = createEditor(converted.scene);
+    const created = createEditor(converted.scene, { ...defaultEditorModules, requestStylePlan });
     setEditor(created);
     setDetached(false);
     // Straight in. Voice comes up on its own with the editor, so the sweep ends and the
@@ -464,7 +466,7 @@ export default function Home() {
               onLongPress={
                 __DEV__
                   ? () => {
-                      setEditor(createEditor(sampleRoom()));
+                      setEditor(createEditor(sampleRoom(), { ...defaultEditorModules, requestStylePlan }));
                       setPhase('edit');
                     }
                   : undefined
