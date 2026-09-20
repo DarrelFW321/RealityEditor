@@ -41,3 +41,10 @@ workers/furniture/.venv/
 # references them by hash, and a missing file is a 404 at demo time. ~4MB each.
 # `.objects/` is per-request scratch from live generation and is not committed.
 .objects/
+
+# Spike meshes: the stripped ones rebuild free from the catalog via strip.mjs.
+# The generated ones cost credits, so they stay.
+spikes/**/meshes/*
+!spikes/**/meshes/index.json
+!spikes/**/meshes/gen-*
+!spikes/**/meshes/img-*

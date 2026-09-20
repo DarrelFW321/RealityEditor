@@ -1,0 +1,209 @@
+{
+  "dropUVs": false,
+  "meshes": [
+    {
+      "id": "gen-stone-statue",
+      "file": "meshes/gen-stone-statue.glb",
+      "category": "statue",
+      "materialFamily": "stone",
+      "dimensionsM": {
+        "width": 0.3,
+        "height": 0.6,
+        "depth": 0.3
+      },
+      "hasUVs": true,
+      "source": "generated",
+      "meshy": {
+        "taskId": "01a0bd39-2eb4-75e6-a740-afadfc216439",
+        "credits": 20,
+        "triangles": 48915,
+        "builtAt": "2026-09-20T05:11:37.208Z"
+      }
+    },
+    {
+      "id": "gen-linen-armchair",
+      "file": "meshes/gen-linen-armchair.glb",
+      "category": "armchair",
+      "materialFamily": "fabric",
+      "dimensionsM": {
+        "width": 0.78,
+        "height": 0.82,
+        "depth": 0.82
+      },
+      "hasUVs": true,
+      "source": "generated",
+      "meshy": {
+        "taskId": "01a0bd3a-1c50-719a-853d-02768e165c83",
+        "credits": 20,
+        "triangles": 49733,
+        "builtAt": "2026-09-20T05:13:01.013Z"
+      }
+    },
+    {
+      "id": "gen-oak-cabinet",
+      "file": "meshes/gen-oak-cabinet.glb",
+      "category": "cabinet",
+      "materialFamily": "wood",
+      "dimensionsM": {
+        "width": 0.9,
+        "height": 1.2,
+        "depth": 0.42
+      },
+      "hasUVs": true,
+      "source": "generated",
+      "meshy": {
+        "taskId": "01a0bd3b-63ae-75b4-83cc-534de7cec7c1",
+        "credits": 20,
+        "triangles": 38489,
+        "builtAt": "2026-09-20T05:14:19.933Z"
+      }
+    },
+    {
+      "id": "two-door-cabinet",
+      "file": "meshes/two-door-cabinet.glb",
+      "category": "cabinet",
+      "materialFamily": "wood",
+      "dimensionsM": {
+        "width": 0.9,
+        "height": 1.2,
+        "depth": 0.42
+      },
+      "hasUVs": true,
+      "source": "stripped"
+    },
+    {
+      "id": "linen-armchair",
+      "file": "meshes/linen-armchair.glb",
+      "category": "armchair",
+      "materialFamily": "fabric",
+      "dimensionsM": {
+        "width": 0.78,
+        "height": 0.82,
+        "depth": 0.82
+      },
+      "hasUVs": true,
+      "source": "stripped"
+    },
+    {
+      "id": "three-seat-sofa",
+      "file": "meshes/three-seat-sofa.glb",
+      "category": "sofa",
+      "materialFamily": "fabric",
+      "dimensionsM": {
+        "width": 2.3,
+        "height": 0.85,
+        "depth": 0.95
+      },
+      "hasUVs": true,
+      "source": "stripped"
+    },
+    {
+      "id": "tripod-floor-lamp",
+      "file": "meshes/tripod-floor-lamp.glb",
+      "category": "floor_lamp",
+      "materialFamily": "fabric",
+      "dimensionsM": {
+        "width": 0.4,
+        "height": 1.5,
+        "depth": 0.4
+      },
+      "hasUVs": true,
+      "source": "stripped"
+    },
+    {
+      "id": "stone-statue",
+      "file": "meshes/stone-statue.glb",
+      "category": "statue",
+      "materialFamily": "stone",
+      "dimensionsM": {
+        "width": 0.3,
+        "height": 0.6,
+        "depth": 0.3
+      },
+      "hasUVs": true,
+      "source": "stripped"
+    },
+    {
+      "id": "potted-plant",
+      "file": "meshes/potted-plant.glb",
+      "category": "plant",
+      "materialFamily": "foliage",
+      "dimensionsM": {
+        "width": 0.4,
+        "height": 0.8,
+        "depth": 0.4
+      },
+      "hasUVs": true,
+      "source": "stripped"
+    },
+    {
+      "id": "img-stone-statue",
+      "file": "meshes/img-stone-statue.glb",
+      "image": "meshes/img-stone-statue.png",
+      "category": "statue",
+      "materialFamily": "stone",
+      "dimensionsM": {
+        "width": 0.3,
+        "height": 0.6,
+        "depth": 0.3
+      },
+      "hasUVs": true,
+      "source": "generated-image",
+      "meshy": {
+        "taskId": "01a0bd42-e68a-76b9-9dff-5cc567c0995c",
+        "credits": 20,
+        "triangles": 50328,
+        "imageMs": 21297,
+        "meshMs": 48399,
+        "model": "fal-ai/flux/schnell",
+        "builtAt": "2026-09-20T05:22:01.475Z"
+      }
+    },
+    {
+      "id": "img-linen-armchair",
+      "file": "meshes/img-linen-armchair.glb",
+      "image": "meshes/img-linen-armchair.png",
+      "category": "armchair",
+      "materialFamily": "fabric",
+      "dimensionsM": {
+        "width": 0.78,
+        "height": 0.82,
+        "depth": 0.82
+      },
+      "hasUVs": true,
+      "source": "generated-image",
+      "meshy": {
+        "taskId": "01a0bd43-b083-724e-a306-99e812602073",
+        "credits": 20,
+        "triangles": 49276,
+        "imageMs": 3460,
+        "meshMs": 69148,
+        "model": "fal-ai/flux/schnell",
+        "builtAt": "2026-09-20T05:23:14.090Z"
+      }
+    },
+    {
+      "id": "img-oak-cabinet",
+      "file": "meshes/img-oak-cabinet.glb",
+      "image": "meshes/img-oak-cabinet.png",
+      "category": "cabinet",
+      "materialFamily": "wood",
+      "dimensionsM": {
+        "width": 0.9,
+        "height": 1.2,
+        "depth": 0.42
+      },
+      "hasUVs": true,
+      "source": "generated-image",
+      "meshy": {
+        "taskId": "01a0bd44-cc0b-7556-83de-4df5f6377483",
+        "credits": 20,
+        "triangles": 35772,
+        "imageMs": 3432,
+        "meshMs": 58862,
+        "model": "fal-ai/flux/schnell",
+        "builtAt": "2026-09-20T05:24:16.399Z"
+      }
+    }
+  ]
+}

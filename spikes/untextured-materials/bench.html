@@ -1,0 +1,279 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Untextured mesh + catalog material</title>
+
+<script type="importmap">
+  {
+    "imports": {
+      "three": "/node_modules/three/build/three.module.js",
+      "three/addons/": "/node_modules/three/examples/jsm/"
+    }
+  }
+</script>
+
+<style>
+  :root { color-scheme: dark; --bg:#0c1420; --card:#141d2b; --line:#22304a; --ink:#e8eef7; --dim:#8b9ab1; --bad:#d9636b; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:20px 16px 64px; background:var(--bg); color:var(--ink);
+         font:14px/1.5 ui-sans-serif,-apple-system,system-ui,sans-serif; }
+  header, .rows { max-width:1240px; margin:0 auto; }
+  h1 { margin:0 0 4px; font-size:19px; letter-spacing:-0.01em; }
+  .sub { color:var(--dim); }
+  .bar { display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin:14px 0 6px; }
+  select, input { background:var(--card); border:1px solid var(--line); color:var(--ink);
+                  border-radius:8px; padding:5px 9px; font:inherit; }
+  label { color:var(--dim); display:flex; gap:6px; align-items:center; }
+  .row { display:grid; grid-template-columns:130px repeat(3,1fr); gap:10px; align-items:center;
+         background:var(--card); border:1px solid var(--line); border-radius:12px;
+         padding:10px; margin-bottom:10px; }
+  .name { font-weight:600; font-size:13px; }
+  .name small { display:block; color:var(--dim); font-weight:400; }
+  .name img { width:100%; margin-top:6px; border-radius:6px; border:1px solid var(--line); }
+  canvas { width:100%; aspect-ratio:4/3; display:block; background:#0f1826; border-radius:8px; }
+  .heads { display:grid; grid-template-columns:130px repeat(3,1fr); gap:10px; padding:0 10px 6px;
+           color:var(--dim); font-size:12px; }
+  .status { max-width:1240px; margin:0 auto 10px; color:var(--dim); }
+  .bad { color:var(--bad); }
+</style>
+
+<header>
+  <h1>Untextured mesh + catalog material</h1>
+  <div class="sub">
+    Does a tiled PBR set read convincingly on Meshy geometry that was never textured?
+    Left is what <code>should_texture:false</code> gives you.
+  </div>
+  <div class="bar">
+    <label>material
+      <select id="material"></select>
+    </label>
+    <label>tiling
+      <input id="scale" type="range" min="0.2" max="8" step="0.1" value="2" />
+      <span id="scaleOut">2.0</span> ×/m
+    </label>
+    <label><input id="spin" type="checkbox" checked /> rotate</label>
+  </div>
+</header>
+
+<div class="status" id="status">Loading…</div>
+<div class="heads">
+  <div></div>
+  <div>1 · untextured (raw Meshy)</div>
+  <div>2 · material through the mesh's own UVs</div>
+  <div>3 · material by triplanar projection</div>
+</div>
+<div class="rows" id="rows"></div>
+
+<script type="module">
+  import * as THREE from 'three';
+  import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+  const MATERIALS = ['mat_oak_light', 'mat_walnut_dark', 'mat_marble_beige', 'mat_linen_oat',
+                     'mat_boucle_cream', 'mat_leather_tan', 'mat_metal_dark', 'mat_concrete',
+                     'mat_velvet_deep', 'mat_felt_grey', 'mat_bamboo', 'mat_oak_floor'];
+  const W = 380, H = 285;
+  const statusLine = document.getElementById('status');
+  const pick = document.getElementById('material');
+  for (const id of MATERIALS) pick.add(new Option(id.replace('mat_', '').replace(/_/g, ' '), id));
+  pick.value = 'mat_oak_light';
+
+  const fail = (what, error) => {
+    statusLine.innerHTML = `<span class="bad">${what}: ${error?.message ?? error}</span>`;
+    console.error(what, error);
+  };
+  addEventListener('error', (e) => fail('Page error', e.error ?? e.message));
+  addEventListener('unhandledrejection', (e) => fail('Unhandled rejection', e.reason));
+
+  const loader = new GLTFLoader();
+  const textures = new THREE.TextureLoader();
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  renderer.setSize(W, H, false);
+  renderer.setPixelRatio(1);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+  function loadMaps(id) {
+    const base = `/catalog/materials/${id}`;
+    const get = (file, srgb) =>
+      new Promise((resolve, reject) =>
+        textures.load(`${base}/${file}`, (t) => {
+          t.wrapS = t.wrapT = THREE.RepeatWrapping;
+          t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.LinearSRGBColorSpace;
+          resolve(t);
+        }, undefined, () => reject(new Error(`${id}/${file}`))),
+      );
+    return Promise.all([get('diff.jpg', true), get('rough.jpg', false), get('nor_gl.jpg', false)])
+      .then(([map, roughnessMap, normalMap]) => ({ map, roughnessMap, normalMap }));
+  }
+
+  /**
+   * Samples the maps in object space and blends by the normal, so no UVs are needed.
+   * Normal mapping is left off here: triplanar normals need per-axis tangent blending,
+   * and a wrong one would flatter the result.
+   */
+  function triplanar(material, scale) {
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.uScale = { value: scale };
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vObjP;\nvarying vec3 vObjN;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvObjP = position;\nvObjN = normal;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `#include <common>
+          varying vec3 vObjP; varying vec3 vObjN; uniform float uScale;
+          vec4 tri(sampler2D s, vec3 p, vec3 n){
+            vec3 b = pow(abs(n), vec3(4.0));
+            b /= max(b.x + b.y + b.z, 1e-4);
+            return texture2D(s, p.yz * uScale) * b.x
+                 + texture2D(s, p.xz * uScale) * b.y
+                 + texture2D(s, p.xy * uScale) * b.z;
+          }`)
+        .replace('#include <map_fragment>', `
+          #ifdef USE_MAP
+            diffuseColor *= tri(map, vObjP, normalize(vObjN));
+          #endif`)
+        .replace('#include <roughnessmap_fragment>', `
+          float roughnessFactor = roughness;
+          #ifdef USE_ROUGHNESSMAP
+            roughnessFactor *= tri(roughnessMap, vObjP, normalize(vObjN)).g;
+          #endif`);
+      material.userData.shader = shader;
+    };
+    material.needsUpdate = true;
+  }
+
+  function lit(scene) {
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x2a3446, 1.9));
+    const key = new THREE.DirectionalLight(0xffffff, 1.6);
+    key.position.set(2.4, 3.4, 2.8);
+    scene.add(key);
+    const fill = new THREE.DirectionalLight(0xffffff, 0.5);
+    fill.position.set(-2.2, 1.4, -1.8);
+    scene.add(fill);
+  }
+
+  let index;
+  try {
+    index = await (await fetch('meshes/index.json')).json();
+  } catch (error) {
+    fail('Could not read meshes/index.json — run: node spikes/untextured-materials/strip.mjs', error);
+    throw error;
+  }
+
+  let maps = await loadMaps(pick.value).catch((e) => { fail('Material maps failed', e); throw e; });
+  const panes = [];
+
+  for (const mesh of index.meshes) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const tris = mesh.meshy?.triangles ? `${(mesh.meshy.triangles / 1000).toFixed(0)}k tris` : '';
+    row.innerHTML =
+      `<div class="name">${mesh.id}` +
+      `<small>${mesh.category} · wants ${mesh.materialFamily}</small>` +
+      `<small>${mesh.source ?? ''} ${tris}</small>` +
+      // The reference fal image, so the mesh can be judged against what it was built from.
+      (mesh.image ? `<img src="${mesh.image}" alt="source image" />` : '') +
+      `</div>`;
+    // 2D canvases, not WebGL ones. Nine rows x three columns is 27 contexts and browsers
+    // cap around sixteen; one shared renderer draws into these instead.
+    const canvases = [0, 1, 2].map(() => {
+      const c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      row.append(c);
+      return c.getContext('2d');
+    });
+    document.getElementById('rows').append(row);
+
+    statusLine.textContent = `Loading ${mesh.id}…`;
+    let gltf;
+    try {
+      gltf = await loader.loadAsync(mesh.file);
+    } catch (error) {
+      row.querySelector('.name').innerHTML += `<small class="bad">failed to load</small>`;
+      continue;
+    }
+
+    const uvWarned = [];
+    gltf.scene.traverse((n) => {
+      if (n.isMesh && !n.geometry.attributes.uv) uvWarned.push(n.name || 'mesh');
+    });
+
+    for (const [column, target] of canvases.entries()) {
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x0f1826);
+      lit(scene);
+      const model = gltf.scene.clone(true);
+      model.traverse((n) => {
+        if (!n.isMesh) return;
+        if (column === 0) {
+          n.material = new THREE.MeshStandardMaterial({ color: 0xd2d2d2, roughness: 0.9, metalness: 0 });
+          return;
+        }
+        const material = new THREE.MeshStandardMaterial({
+          map: maps.map, roughnessMap: maps.roughnessMap,
+          ...(column === 1 ? { normalMap: maps.normalMap } : {}),
+          roughness: 1, metalness: 0,
+        });
+        if (column === 2) triplanar(material, Number(document.getElementById('scale').value));
+        n.material = material;
+      });
+      scene.add(model);
+
+      const box = new THREE.Box3().setFromObject(model);
+      const centre = box.getCenter(new THREE.Vector3());
+      const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 1e-3);
+      const camera = new THREE.PerspectiveCamera(38, W / H, radius / 100, radius * 40);
+      panes.push({ target, scene, camera, centre, radius, column, model });
+    }
+
+    if (uvWarned.length)
+      row.querySelector('.name').innerHTML +=
+        `<small class="bad">no UVs — column 2 is meaningless</small>`;
+  }
+
+  statusLine.textContent =
+    `${index.meshes.length} meshes · UVs ${index.dropUVs ? 'DROPPED (honest case)' : 'kept from the bake'} · three r${THREE.REVISION}`;
+
+  let angle = 0.5;
+  function frame() {
+    if (document.getElementById('spin').checked) angle += 0.004;
+    for (const p of panes) {
+      const d = (p.radius / Math.sin((38 * Math.PI) / 360)) * 1.1;
+      p.camera.position.set(
+        p.centre.x + Math.sin(angle) * d * 0.86,
+        p.centre.y + d * 0.38,
+        p.centre.z + Math.cos(angle) * d * 0.86,
+      );
+      p.camera.lookAt(p.centre);
+      renderer.render(p.scene, p.camera);
+      p.target.drawImage(renderer.domElement, 0, 0);
+    }
+    requestAnimationFrame(frame);
+  }
+  frame();
+
+  document.getElementById('scale').addEventListener('input', (event) => {
+    const value = Number(event.target.value);
+    document.getElementById('scaleOut').textContent = value.toFixed(1);
+    for (const p of panes)
+      if (p.column === 2)
+        p.model.traverse((n) => {
+          const shader = n.isMesh && n.material.userData?.shader;
+          if (shader) shader.uniforms.uScale.value = value;
+        });
+  });
+
+  pick.addEventListener('change', async () => {
+    try {
+      maps = await loadMaps(pick.value);
+    } catch (error) { return fail('Material maps failed', error); }
+    for (const p of panes)
+      if (p.column > 0)
+        p.model.traverse((n) => {
+          if (!n.isMesh) return;
+          n.material.map = maps.map;
+          n.material.roughnessMap = maps.roughnessMap;
+          if (p.column === 1) n.material.normalMap = maps.normalMap;
+          n.material.needsUpdate = true;
+        });
+  });
+</script>
