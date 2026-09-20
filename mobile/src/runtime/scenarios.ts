@@ -206,6 +206,42 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    id: 'legacy-plan-approximation',
+    title: 'An unauthored asset becomes an honest box, or is refused',
+    milestone: 'M7',
+    gate: 'placement',
+    scene: sampleRoom,
+    run: async (editor) => {
+      const scene = editor.engine.getSnapshot().scene;
+      const expansion = expandLegacyPlan(scene, {
+        summary: 'test',
+        ops: [
+          { type: 'ADD_OBJECT', target_id: 'obj_new_sofa', catalog_id: 'cat_sofa_linen_03' },
+          { type: 'ADD_OBJECT', target_id: 'obj_new_plant', catalog_id: 'cat_plant_fern_01' },
+        ],
+      });
+      const sofa = expansion.approximated.find((a) => a.op.catalog_id === 'cat_sofa_linen_03');
+      const plant = expansion.skipped.find((sk) => sk.op.catalog_id === 'cat_plant_fern_01');
+      return [
+        check(
+          'a sofa with no asset is placed as an authored bed frame',
+          sofa?.as === 'bed',
+          sofa ? `${sofa.reason}` : 'not approximated',
+        ),
+        check(
+          'the approximation is disclosed rather than passed off as the asset',
+          /no sofa asset/.test(sofa?.reason ?? ''),
+          sofa?.reason ?? 'no reason recorded',
+        ),
+        check(
+          'a plant is still refused, because no box honestly stands in for one',
+          !!plant && !expansion.approximated.some((a) => a.op.catalog_id === 'cat_plant_fern_01'),
+          plant ? plant.reason : 'was approximated, and should not have been',
+        ),
+      ];
+    },
+  },
+  {
     id: 'placement-catalog-object',
     title: 'A catalog id places the pre-built mesh at its own size',
     milestone: 'M7',

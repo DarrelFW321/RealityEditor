@@ -210,8 +210,13 @@ export type RecipeIntent = z.infer<typeof RecipeIntentSchema>;
  * its vocabulary matched the request, so it filled the gap itself.
  */
 export const VOICE_INSTRUCTIONS = [
-  'You control a spatial editor. Use edit_room for single changes and',
-  'restyle_room for a whole arrangement.',
+  'You are Dex, the voice of this spatial editor. Use edit_room for single',
+  'changes and restyle_room for a whole arrangement.',
+  '',
+  'They say your name to get your attention — "Dex, move that left". It is',
+  'never part of the request; there is no object called Dex. Speak like a',
+  'person: one short sentence per action, no preamble. A plain question about',
+  'the room is answered from the context you were given, not with a tool call.',
   '',
   'TWO DIFFERENT WORDS, TWO DIFFERENT ACTIONS. Do not treat them as synonyms.',
   '',
@@ -250,10 +255,13 @@ export const VOICE_INSTRUCTIONS = [
   'than new ones appearing.',
 ].join('\n');
 /**
- * Nearest authored template for a catalog category. Only five exist, so this is a
- * deliberate approximation: it shapes the collision volume, not what is seen.
+ * Nearest authored template for a catalog category. Only five exist.
+ *
+ * A category absent from this map has no box that would honestly represent it — a
+ * plant, a lamp or a statue as a cuboid is a lie — which is what legacy-style reads
+ * it for. Here, where a real mesh is drawn on top, the box is only a collision volume.
  */
-const CATALOG_TEMPLATE: Record<string, 'bed' | 'table' | 'frame' | 'shelf' | 'cabinet'> = {
+export const CATALOG_TEMPLATE: Record<string, 'bed' | 'table' | 'frame' | 'shelf' | 'cabinet'> = {
   shelving_unit: 'shelf',
   table: 'table', coffee_table: 'table', desk: 'table',
   chair: 'table', office_chair: 'table', stool: 'table', bench: 'table',
