@@ -1,5 +1,5 @@
-import type { DimensionsM, ObjectSpec, SizeClass } from './spec.js';
-import type { ObjectMaterial } from './materials.js';
+import type { DimensionsM, ObjectSpec, SizeClass } from './spec';
+import type { ObjectMaterial } from './materials';
 
 export const CATALOG_THRESHOLD = 0.6;
 

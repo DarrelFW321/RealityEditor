@@ -1,5 +1,5 @@
-import type { ObjectSpec } from './spec.js';
-import type { ObjectMaterial } from './materials.js';
+import type { ObjectSpec } from './spec';
+import type { ObjectMaterial } from './materials';
 
 export type SizePreset = 'tiny' | 'small' | 'medium' | 'large' | 'huge';
 

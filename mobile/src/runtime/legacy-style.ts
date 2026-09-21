@@ -1,6 +1,5 @@
 import type { EditorState, Template } from '@reality/contracts';
-import { interpretPrompt } from '@reality/object-spec';
-import { CATALOG_TEMPLATE, type RecipeIntent } from './editor';
+import type { RecipeIntent } from './editor';
 
 /**
  * Legacy `/plan_style` compatibility (M7.6.4).
@@ -29,22 +28,14 @@ export type LegacyOp = {
 
 export type LegacyPlan = { summary: string; ops: LegacyOp[] };
 
-/** RecipeIntentSchema's own cap. Exceeding it rejects the arrangement outright. */
-const MAX_ITEMS = 6;
-
 export type Expansion = {
   recipe: RecipeIntent;
   /**
    * Ops that could not be expressed, with the reason. Never silently dropped: an op
-   * naming something no box could honestly stand in for is reported as unsupported
-   * rather than approximated (M7.1.5).
+   * that names a family we have no template for must be reported as unsupported, not
+   * approximated with a box (M7.1.5).
    */
   skipped: { op: LegacyOp; reason: string }[];
-  /**
-   * Ops placed as an authored box rather than the asset asked for. The "never
-   * silently" half of M7.1.5 still holds: these are disclosed, not hidden.
-   */
-  approximated: { op: LegacyOp; as: Template; reason: string }[];
 };
 
 const FAMILIES: Template[] = ['bed', 'table', 'frame', 'shelf', 'cabinet'];
@@ -73,26 +64,10 @@ export function familyOf(scene: EditorState, op: LegacyOp): Template | null {
   return null;
 }
 
-/**
- * Reads a catalogue id as words and asks the analyzer what it is.
- *
- * Returns a template only where a box is an honest stand-in. A plant, lamp, vase or
- * statue resolves to a category absent from CATALOG_TEMPLATE, and stays refused —
- * those are exactly the shapes a cuboid misrepresents.
- */
-export function approximateFamily(op: LegacyOp): { family: Template; category: string } | null {
-  const words = `${op.catalog_id ?? ''}`.replace(/[_-]+/g, ' ').replace(/\d+/g, ' ').trim();
-  if (words.length < 3) return null;
-  const category = interpretPrompt({ prompt: words }).category;
-  const family = CATALOG_TEMPLATE[category];
-  return family ? { family, category } : null;
-}
-
 const isHex = (value: unknown): value is string => typeof value === 'string' && /^#[\da-f]{6}$/i.test(value);
 
 export function expandLegacyPlan(scene: EditorState, plan: LegacyPlan): Expansion {
   const skipped: { op: LegacyOp; reason: string }[] = [];
-  const approximated: Expansion['approximated'] = [];
   const items: RecipeIntent['items'] = [];
   const replaceIds: string[] = [];
   const touched = new Set<string>();
@@ -132,22 +107,13 @@ export function expandLegacyPlan(scene: EditorState, plan: LegacyPlan): Expansio
       skipped.push({ op, reason: 'legacy material refs carry no structural class' });
       continue;
     }
-    let family = familyOf(scene, op);
+    const family = familyOf(scene, op);
     if (!family) {
-      const approximation = approximateFamily(op);
-      if (!approximation) {
-        skipped.push({
-          op,
-          reason: `no authored template for that object; it would only be an approximation`,
-        });
-        continue;
-      }
-      family = approximation.family;
-      approximated.push({
+      skipped.push({
         op,
-        as: approximation.family,
-        reason: `no ${approximation.category.replace(/_/g, ' ')} asset; placed as an authored ${approximation.family}`,
+        reason: `no authored template for that object; it would only be an approximation`,
       });
+      continue;
     }
     if (op.type !== 'ADD_OBJECT') {
       if (!objectIds.has(op.target_id)) {
@@ -158,13 +124,6 @@ export function expandLegacyPlan(scene: EditorState, plan: LegacyPlan): Expansio
       // the legacy vocabulary gives a relation and never a pose, so the position has to
       // be computed here regardless.
       replaceIds.push(op.target_id);
-    }
-    // RecipeIntent carries at most six items, while a plan may hold twelve ops.
-    // Overflowing would fail the whole arrangement's safeParse, losing a usable
-    // plan entirely, so the tail is reported as skipped like any other op.
-    if (items.length >= MAX_ITEMS) {
-      skipped.push({ op, reason: `only the first ${MAX_ITEMS} placements fit one arrangement` });
-      continue;
     }
     touched.add(op.target_id);
     const existing = scene.design.objects.find((o) => o.id === op.target_id);
@@ -193,6 +152,5 @@ export function expandLegacyPlan(scene: EditorState, plan: LegacyPlan): Expansio
       preserve_ids: [...objectIds].filter((id) => !touched.has(id)).sort(),
     },
     skipped,
-    approximated,
   };
 }

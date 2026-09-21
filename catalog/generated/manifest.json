@@ -700,6 +700,105 @@
       "bytes": 10385864,
       "triangles": 51223,
       "textures": 3
+    },
+    {
+      "id": "leather-ottoman",
+      "status": "complete",
+      "category": "stool",
+      "size": "medium",
+      "materialFamily": "leather",
+      "baseFinish": "tan leather",
+      "tintable": true,
+      "keywords": [
+        "ottoman",
+        "footstool"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 0.8846,
+        "height": 0.6243,
+        "depth": 0.6211
+      },
+      "label": "a leather ottoman footstool",
+      "prompt": "a leather ottoman footstool, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "undyed pale vegetable-tanned leather, soft even grain, photoreal physically based material on a stool, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "79640a8e2a3ed2c0cb8ab30246eb9a71626226ede718d6c9424462e09b10c707",
+      "file": "assets/79640a8e2a3ed2c0cb8ab30246eb9a71626226ede718d6c9424462e09b10c707.glb",
+      "source": {
+        "from": "usdz",
+        "file": "usdz/leather-ottoman"
+      },
+      "bytes": 408532,
+      "triangles": 4240,
+      "textures": 0
+    },
+    {
+      "id": "ash-bar-stool",
+      "status": "complete",
+      "category": "stool",
+      "size": "medium",
+      "materialFamily": "wood",
+      "baseFinish": "pale ash",
+      "tintable": true,
+      "keywords": [
+        "bar",
+        "stool"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 0.4832,
+        "height": 0.7505,
+        "depth": 0.486
+      },
+      "label": "a bar stool in pale ash with a round seat",
+      "prompt": "a bar stool in pale ash with a round seat, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "pale natural oak, fine straight grain, matte clear finish, photoreal physically based material on a stool, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "c7aecedc1b48203d71d17bb2f3a662264547d7b3c64ef18c85c42085418d1c50",
+      "file": "assets/c7aecedc1b48203d71d17bb2f3a662264547d7b3c64ef18c85c42085418d1c50.glb",
+      "source": {
+        "from": "usdz",
+        "file": "usdz/ash-bar-stool"
+      },
+      "bytes": 1381352,
+      "triangles": 14373,
+      "textures": 0
+    },
+    {
+      "id": "walnut-console-table",
+      "status": "complete",
+      "category": "table",
+      "size": "medium",
+      "materialFamily": "wood",
+      "baseFinish": "dark walnut",
+      "tintable": true,
+      "keywords": [
+        "console",
+        "hallway"
+      ],
+      "structure": {
+        "compartmentCount": null
+      },
+      "dimensionsM": {
+        "width": 1.543,
+        "height": 0.9491,
+        "depth": 0.5893
+      },
+      "label": "a classic console table in dark walnut",
+      "prompt": "a classic console table in dark walnut, single freestanding object, complete and unbroken, clean straight edges, physically plausible construction, completely empty and undecorated, nothing stored on or inside it, no background, no props, no other objects",
+      "texturePrompt": "pale natural oak, fine straight grain, matte clear finish, photoreal physically based material on a table, high surface detail, flat even studio lighting, no cast shadows, uniform albedo, no baked highlights",
+      "sha256": "ad66716ae6aff89d57ac21464360a158254254e758e565bd856b6b3f4642ae5f",
+      "file": "assets/ad66716ae6aff89d57ac21464360a158254254e758e565bd856b6b3f4642ae5f.glb",
+      "source": {
+        "from": "usdz",
+        "file": "usdz/walnut-console-table"
+      },
+      "bytes": 727724,
+      "triangles": 7566,
+      "textures": 0
     }
   ]
 }

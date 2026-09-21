@@ -29,6 +29,7 @@ export const config = {
   host: process.env.HOST ?? "0.0.0.0",
 
   openaiApiKey: credential("OPENAI_API_KEY"),
+  anthropicApiKey: credential("ANTHROPIC_API_KEY"),
 
   /**
    * Verified against the GA Realtime docs. The preview interface used
@@ -84,18 +85,10 @@ export const config = {
    * animation covers it. Effort is held low for that reason, not to save money.
    */
   planner: {
-    /**
-     * Standard tier, not pro: this emits at most 12 ops against a constrained
-     * schema that is re-validated server-side. Pinned rather than an alias for
-     * the same reason REALTIME_MODEL is — model ids move.
-     */
-    model: process.env.PLANNER_MODEL ?? "gpt-5.5-2026-04-23",
-    url: "https://api.openai.com/v1/chat/completions",
+    /** Sonnet, not Opus: this emits at most 12 ops against a constrained schema
+     * that is re-validated server-side, and it is off the critical path. */
+    model: "claude-sonnet-5",
     maxOps: 12,
-    /** "minimal" is rejected by this model; "low" zeroes the reasoning tokens. */
-    effort: process.env.PLANNER_EFFORT ?? "low",
-    /** Generous: it is off the critical path, behind a "thinking" animation. */
-    timeoutMs: Number(process.env.PLANNER_TIMEOUT_MS ?? 60_000),
   },
 
   /**
@@ -110,7 +103,7 @@ export const config = {
   },
 } as const;
 
-export function missingKeyResponse(which: "OPENAI_API_KEY") {
+export function missingKeyResponse(which: "OPENAI_API_KEY" | "ANTHROPIC_API_KEY") {
   return {
     error: "not_configured",
     message: `${which} is not set. Copy server/.env.example to server/.env and fill it in.`,

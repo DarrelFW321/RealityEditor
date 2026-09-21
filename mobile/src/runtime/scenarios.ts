@@ -22,7 +22,7 @@ import { roomToSession } from '../adapters/room-conversion';
 import { applyToPoint, roomFromWorld } from '../adapters/room-space';
 import type { EditorState, EditResult, InteractionContext, Vec3 } from '@reality/contracts';
 import { setObjectCatalog } from './object-catalog';
-import { createEditor, defaultEditorModules, type Editor } from './editor';
+import { createEditor, type Editor } from './editor';
 import { compositingScenarios } from './compositing-scenarios';
 import { InputCoordinator, DESTINATION_MAX_AGE_MS } from './coordinator';
 import { buildOccupancy, buildScp, isAmbiguous, largestOpenRect } from '@reality/spatial-engine';
@@ -206,97 +206,345 @@ export const scenarios: Scenario[] = [
     },
   },
   {
-    id: 'restyle-server-plan',
-    title: 'A theme with no items is furnished by the server, and says what it did',
+    id: 'design-agent-choice',
+    title: 'A design places as much as fits, stacks, and touches nothing existing',
     milestone: 'M7',
     gate: 'placement',
-    scene: sampleRoom,
-    run: async () => {
-      // A fixed plan stands in for the server: what is under test is the routing
-      // and the disclosure, not the planner's taste.
-      const planned = createEditor(sampleRoom(), {
-        ...defaultEditorModules,
-        requestStylePlan: async () => ({
-          summary: 'warm scandinavian',
-          ops: [
-            { type: 'CHANGE_COLOR' as const, target_id: 'srf_wall_north', color_hex: '#e8e4dc' },
-            { type: 'ADD_OBJECT' as const, target_id: 'obj_new_shelf', catalog_id: 'cat_shelves_display_01' },
-            { type: 'ADD_OBJECT' as const, target_id: 'obj_new_sofa', catalog_id: 'cat_sofa_linen_03' },
-            { type: 'ADD_OBJECT' as const, target_id: 'obj_new_plant', catalog_id: 'cat_plant_fern_01' },
-          ],
-        }),
-      });
-      const withPlanner = await planned.restyle(
-        { label: 'warm scandinavian living room' },
-        context(planned, onFloor(planned, [0, 0, -1.2])),
-        'server-restyle',
+    scene: sampleRoomFurnished,
+    run: async (editor) => {
+      // Real sizes and categories. A uniform stand-in catalog is not a test of this: the
+      // whole question is whether a specific object fits on a specific other one.
+      const SIZES: Record<string, { c: string; w: number; h: number; d: number }> = {
+        'three-seat-sofa': { c: 'sofa', w: 2.3, h: 0.85, d: 0.95 },
+        'two-door-cabinet': { c: 'cabinet', w: 0.9, h: 1.2, d: 0.42 },
+        'television-on-stand': { c: 'television', w: 1.24, h: 0.78, d: 0.25 },
+        'round-coffee-table': { c: 'coffee_table', w: 1.0, h: 0.42, d: 0.55 },
+        'tall-shelving-unit': { c: 'shelving_unit', w: 1.2, h: 1.8, d: 0.35 },
+        'tripod-floor-lamp': { c: 'floor_lamp', w: 0.4, h: 1.5, d: 0.4 },
+        'potted-plant': { c: 'plant', w: 0.4, h: 0.8, d: 0.4 },
+        'framed-painting': { c: 'painting', w: 0.6, h: 0.8, d: 0.04 },
+      };
+      setObjectCatalog(
+        Object.entries(SIZES).map(([id, v], n) => ({
+          id,
+          category: v.c,
+          size: 'medium' as const,
+          materialFamily: 'wood',
+          sha256: String(n).padStart(64, 'f'),
+          dimensionsM: { width: v.w, height: v.h, depth: v.d },
+        })),
       );
+      const before = editor.engine.getSnapshot().scene.design.objects;
+      const beforeIds = new Set(before.map((o) => o.id));
+      const beforePoses = before.map((o) => `${o.id}:${o.pose.position.join(',')}`).join('|');
 
-      // The same request with no reachable planner must fail honestly rather than
-      // silently doing nothing, since a bare theme cannot parse on its own.
-      const offline = createEditor(sampleRoom(), defaultEditorModules);
-      const withoutPlanner = await offline.restyle(
-        { label: 'warm scandinavian living room' },
-        context(offline, onFloor(offline, [0, 0, -1.2])),
-        'offline-restyle',
+      const result = await editor.agentChoice(
+        { design: 'scandinavian' },
+        context(editor, null),
+        'design-run',
       );
+      const after = editor.engine.getSnapshot().scene.design.objects;
+      const added = after.filter((o) => !beforeIds.has(o.id));
+      const survivors = after.filter((o) => beforeIds.has(o.id));
+      const afterPoses = survivors.map((o) => `${o.id}:${o.pose.position.join(',')}`).join('|');
+      // The television is the stacked item; it must be off the ground.
+      const stacked = added.filter((o) => (o.pose.position[1] ?? 0) > 0.2);
+
+      // Second run, same design: the ceilings and the space budget both have to hold.
+      await editor.agentChoice({ design: 'scandinavian' }, context(editor, null), 'design-again');
+      const final = editor.engine.getSnapshot().scene;
+      const countOf = (cid: string) =>
+        final.design.objects.filter((o) => o.asset_ref === `catalog:${cid}`).length;
+      const televisions = countOf('television-on-stand');
+      const sofas = countOf('three-seat-sofa');
+      const plants = countOf('potted-plant');
+      const area = final.design.bounds.area_m2;
+      const occupied = final.design.objects
+        .filter((o) => o.state === 'present')
+        .reduce((sum, o) => sum + (o.dimensions[0] ?? 0) * (o.dimensions[2] ?? 0), 0);
+      setObjectCatalog([]);
 
       return [
+        check('the design placed something', result.status === 'applied' && added.length > 0, `${describe(result)} · ${added.length} added`),
         check(
-          'a bare theme is furnished rather than refused',
-          withPlanner.status !== 'rejected',
-          describe(withPlanner),
+          'it placed several pieces, not just one',
+          added.length >= 3,
+          `${added.length} objects: ${added.map((o) => o.refined_class ?? o.class).join(', ')}`,
         ),
         check(
-          'the sofa approximation is disclosed to the user',
-          withPlanner.caveats.some((c) => /placed as an authored/.test(c)),
-          withPlanner.caveats.join(' | ') || 'no caveats',
+          'at least one piece is resting on another',
+          stacked.length >= 1,
+          stacked.length ? stacked.map((o) => `${o.id}@y=${(o.pose.position[1] ?? 0).toFixed(2)}`).join(' ') : 'nothing above the floor',
         ),
         check(
-          'the plant, which no box represents, is reported as skipped',
-          withPlanner.caveats.some((c) => /Skipped:/.test(c)),
-          withPlanner.caveats.filter((c) => /Skipped:/.test(c)).join(' | ') || 'nothing skipped',
+          'every object already in the room is still there',
+          survivors.length === before.length,
+          `${survivors.length} of ${before.length} survived`,
         ),
         check(
-          'an unreachable planner says so instead of failing silently',
-          withoutPlanner.status === 'rejected' && /room planner/.test(withoutPlanner.message),
-          describe(withoutPlanner),
+          'and none of them moved',
+          afterPoses === beforePoses,
+          afterPoses === beforePoses ? 'byte-identical poses' : 'an existing object was re-posed',
+        ),
+        check(
+          'what did not fit is named rather than dropped silently',
+          result.caveats.length === 0 || result.caveats.some((c) => /No room for/.test(c)),
+          result.caveats.join(' | ') || 'everything fitted',
+        ),
+        // Running it twice is the honest test of the caps: without them "maximal" means
+        // a second sofa and a wall of televisions.
+        check(
+          'running the design again respects the per-item ceilings',
+          televisions === 1 && sofas === 1,
+          `${televisions} television(s), ${sofas} sofa(s) after two runs`,
+        ),
+        check(
+          'an item allowed more than one may still grow',
+          plants > 1 && plants <= 3,
+          `${plants} plants (max 3)`,
+        ),
+        check(
+          'the room is furnished, not packed',
+          occupied < area * 0.75,
+          `${occupied.toFixed(2)}m² of ${area.toFixed(1)}m² floor`,
         ),
       ];
     },
   },
   {
-    id: 'legacy-plan-approximation',
-    title: 'An unauthored asset becomes an honest box, or is refused',
+    id: 'placement-lands-where-aimed',
+    title: 'An object lands where it was pointed, on the floor and on a wall',
     milestone: 'M7',
     gate: 'placement',
     scene: sampleRoom,
     run: async (editor) => {
       const scene = editor.engine.getSnapshot().scene;
-      const expansion = expandLegacyPlan(scene, {
-        summary: 'test',
-        ops: [
-          { type: 'ADD_OBJECT', target_id: 'obj_new_sofa', catalog_id: 'cat_sofa_linen_03' },
-          { type: 'ADD_OBJECT', target_id: 'obj_new_plant', catalog_id: 'cat_plant_fern_01' },
-        ],
+      const wall = scene.design.surfaces.find((s) => s.class === 'wall' && s.state === 'present')!;
+      const summed = wall.polygon.reduce(
+        (a, v) => [(a[0] ?? 0) + (v[0] ?? 0), (a[1] ?? 0) + (v[1] ?? 0), (a[2] ?? 0) + (v[2] ?? 0)],
+        [0, 0, 0] as number[],
+      );
+      const centre = summed.map((v) => v / wall.polygon.length) as Vec3;
+      // Off-centre on purpose: the sample room's wall has a window in the middle, and
+      // "covers window" is a correct refusal that would hide what this is testing.
+      const onWall = (x: number, y: number): InteractionContext['destination'] => ({
+        position: [centre[0] + x, y, centre[2]] as Vec3,
+        surfaceId: wall.id,
+        kind: 'surface',
       });
-      const sofa = expansion.approximated.find((a) => a.op.catalog_id === 'cat_sofa_linen_03');
-      const plant = expansion.skipped.find((sk) => sk.op.catalog_id === 'cat_plant_fern_01');
+
+      const aim: Vec3 = [-1, 0, -1];
+      const floorAdd = await editor.intent(
+        { action: 'add', family: 'cabinet' },
+        context(editor, onFloor(editor, aim)),
+        'aim-floor',
+      );
+      const onFloorObj = editor.engine
+        .getSnapshot()
+        .scene.design.objects.find((o) => o.id === 'aim-floor-0');
+
+      // A FLOOR family aimed at a wall. This regressed once: the family decided the
+      // branch instead of the destination, so it was placed at the wall's own hit point
+      // projected straight down — inside the wall — and the solver had to shove it out.
+      const againstWall = await editor.intent(
+        { action: 'add', family: 'cabinet' },
+        { ...context(editor, null), destination: onWall(-1.2, 1.0) },
+        'aim-cabinet',
+      );
+      const cabinet = editor.engine
+        .getSnapshot()
+        .scene.design.objects.find((o) => o.id === 'aim-cabinet-0');
+
+      const hung = await editor.intent(
+        { action: 'add', family: 'frame' },
+        { ...context(editor, null), destination: onWall(1.2, 1.4) },
+        'aim-frame',
+      );
+      const frame = editor.engine
+        .getSnapshot()
+        .scene.design.objects.find((o) => o.id === 'aim-frame-0');
+
+      // A floor family explicitly MOUNTED. The catalog has no wall-mounted television,
+      // and it does not need one: the id names the object, the support says where it goes.
+      const mounted = await editor.intent(
+        { action: 'add', family: 'cabinet', support: 'wall' },
+        { ...context(editor, null), destination: onWall(-1.6, 1.3) },
+        'aim-mount',
+      );
+      const mountedObj = editor.engine
+        .getSnapshot()
+        .scene.design.objects.find((o) => o.id === 'aim-mount-0');
+
+      const xzError = (p: Vec3 | undefined, to: Vec3) =>
+        p ? Math.hypot((p[0] ?? 0) - to[0], (p[2] ?? 0) - to[2]) : Number.NaN;
+
       return [
         check(
-          'a sofa with no asset is placed as an authored bed frame',
-          sofa?.as === 'bed',
-          sofa ? `${sofa.reason}` : 'not approximated',
+          'a floor object lands exactly where it was pointed',
+          xzError(onFloorObj?.pose.position as Vec3 | undefined, aim) < 0.01,
+          `error ${xzError(onFloorObj?.pose.position as Vec3 | undefined, aim).toFixed(3)}m · ${describe(floorAdd)}`,
         ),
         check(
-          'the approximation is disclosed rather than passed off as the asset',
-          /no sofa asset/.test(sofa?.reason ?? ''),
-          sofa?.reason ?? 'no reason recorded',
+          'a cabinet pointed at a wall stands ON THE FLOOR against it',
+          !!cabinet && Math.abs(cabinet.pose.position[1] ?? -1) < 0.01,
+          `y=${cabinet?.pose.position[1]?.toFixed(3) ?? 'none'} · ${describe(againstWall)}`,
         ),
         check(
-          'a plant is still refused, because no box honestly stands in for one',
-          !!plant && !expansion.approximated.some((a) => a.op.catalog_id === 'cat_plant_fern_01'),
-          plant ? plant.reason : 'was approximated, and should not have been',
+          'and it is clear of the wall plane, not buried in it',
+          !!cabinet && Math.abs((cabinet.pose.position[2] ?? 0) - centre[2]) > 0.05,
+          `z=${cabinet?.pose.position[2]?.toFixed(3) ?? 'none'} vs wall ${centre[2].toFixed(3)}`,
+        ),
+        check(
+          'any object can be MOUNTED when asked, not just wall families',
+          mounted.status === 'applied' || mounted.status === 'adjusted',
+          `${describe(mounted)} · ${mountedObj ? `y=${mountedObj.pose.position[1]?.toFixed(2)} mount=${editor.engine.getSnapshot().scene.assemblies['aim-mount-0']?.mounting}` : 'not placed'}`,
+        ),
+        check(
+          'a frame pointed at a wall hangs at the height it was aimed at',
+          !!frame && Math.abs((frame.pose.position[1] ?? 0) - 1.1) < 0.01,
+          `y=${frame?.pose.position[1]?.toFixed(3) ?? 'none'} (aimed 1.40, half-height 0.30) · ${describe(hung)}`,
+        ),
+      ];
+    },
+  },
+  {
+    id: 'placement-stated-support',
+    title: 'Support is stated, not guessed: floor, wall, or on top of something',
+    milestone: 'M7',
+    gate: 'placement',
+    scene: sampleRoom,
+    run: async (editor) => {
+      setObjectCatalog([
+        {
+          id: 'tv-on-stand', category: 'television', size: 'medium', materialFamily: 'wood',
+          sha256: 'e'.repeat(64), dimensionsM: { width: 1.24, height: 0.78, depth: 0.25 },
+        },
+      ]);
+      // A cabinet first, to be the thing the television goes on.
+      const cabinet = await editor.intent(
+        { action: 'add', family: 'cabinet', support: 'floor' },
+        context(editor, onFloor(editor, [-1, 0, 0])),
+        'sup-cabinet',
+      );
+      const television = await editor.intent(
+        { action: 'add', catalog_id: 'tv-on-stand', support: 'object', support_id: 'sup-cabinet-0' },
+        context(editor, onFloor(editor, [-1, 0, 0])),
+        'sup-tv',
+      );
+      const tv = editor.engine
+        .getSnapshot()
+        .scene.design.objects.find((o) => o.id === 'sup-tv-0');
+      const stand = editor.engine
+        .getSnapshot()
+        .scene.design.objects.find((o) => o.id === 'sup-cabinet-0');
+
+      // A sofa holds nothing. Aiming past one must not turn into a refusal: the ray hits
+      // the sofa, but the request is still "put it down here".
+      const sofa = await editor.intent(
+        { action: 'add', family: 'bed', support: 'floor' },
+        context(editor, onFloor(editor, [1.2, 0, -1.2])),
+        'sup-sofa',
+      );
+      const pastTheSofa = await editor.intent(
+        { action: 'add', family: 'table' },
+        {
+          ...context(editor, onFloor(editor, [0.2, 0, 1.2])),
+          destination: { position: [0.2, 0, 1.2], surfaceId: 'sup-sofa-0', kind: 'object' },
+        },
+        'sup-past-sofa',
+      );
+      void sofa;
+
+      // A frame normally hangs. Said plainly, it may stand on the ground instead.
+      const onGround = await editor.intent(
+        { action: 'add', family: 'frame', support: 'floor' },
+        context(editor, onFloor(editor, [-1.5, 0, -1.5])),
+        'sup-frame-floor',
+      );
+      setObjectCatalog([]);
+
+      return [
+        check('a cabinet is placed on the floor to stand on', cabinet.status === 'applied', describe(cabinet)),
+        check(
+          'a television rests ON the cabinet',
+          television.status === 'applied' || television.status === 'adjusted',
+          describe(television),
+        ),
+        check(
+          'and it sits at the cabinet\'s height, not on the ground',
+          !!tv && !!stand && (tv.pose.position[1] ?? 0) > (stand.pose.position[1] ?? 0) + 0.3,
+          `tv y=${tv?.pose.position[1]?.toFixed(3) ?? '?'} cabinet y=${stand?.pose.position[1]?.toFixed(3) ?? '?'}`,
+        ),
+        check(
+          'pointing at something that cannot hold still places on the floor',
+          pastTheSofa.status === 'applied' || pastTheSofa.status === 'adjusted',
+          describe(pastTheSofa),
+        ),
+        check(
+          'a wall family can be stood on the floor when that is what was asked',
+          onGround.status === 'applied' || onGround.status === 'adjusted',
+          describe(onGround),
+        ),
+      ];
+    },
+  },
+  {
+    id: 'placement-catalog-unrestricted',
+    title: 'Every catalog object can be put down, and thin ones do not throw',
+    milestone: 'M7',
+    gate: 'placement',
+    scene: sampleRoom,
+    run: async (editor) => {
+      // A 4cm-deep painting is the regression case. The size fallback multiplied it by
+      // 0.75 to 3cm, under RecipeSchema's 0.04 floor, and `parse` THROWS — so the add
+      // path left by exception instead of returning a refusal anyone could narrate.
+      setObjectCatalog([
+        {
+          id: 'thin-painting', category: 'painting', size: 'medium', materialFamily: 'wood',
+          sha256: 'c'.repeat(64), dimensionsM: { width: 0.6, height: 0.8, depth: 0.04 },
+        },
+        {
+          id: 'freestanding-shelving', category: 'shelving_unit', size: 'large', materialFamily: 'wood',
+          sha256: 'd'.repeat(64), dimensionsM: { width: 1.2, height: 1.8, depth: 0.35 },
+        },
+      ]);
+      let threw = '';
+      let painting: EditResult | null = null;
+      try {
+        painting = await editor.intent(
+          { action: 'add', catalog_id: 'thin-painting' },
+          context(editor, onFloor(editor, [0, 0, -1.2])),
+          'thin-add',
+        );
+      } catch (error) {
+        threw = error instanceof Error ? error.message.slice(0, 60) : String(error);
+      }
+      const shelving = await editor.intent(
+        { action: 'add', catalog_id: 'freestanding-shelving' },
+        context(editor, onFloor(editor, [-1, 0, 0])),
+        'shelving-add',
+      );
+      const placed = editor.engine
+        .getSnapshot()
+        .scene.design.objects.find((o) => o.id === 'shelving-add-0');
+      setObjectCatalog([]);
+
+      return [
+        check(
+          'a 4cm-deep catalog object refuses politely instead of throwing',
+          threw === '' && painting !== null,
+          threw || describe(painting!),
+        ),
+        check(
+          'a freestanding shelving unit goes on the FLOOR, not a wall',
+          shelving.status === 'applied' || shelving.status === 'adjusted',
+          describe(shelving),
+        ),
+        check(
+          'and it keeps its mesh and its own size',
+          placed?.asset_ref === 'catalog:freestanding-shelving' &&
+            Math.abs((placed.dimensions[1] ?? 0) - 1.8) < 1e-9,
+          `${placed?.asset_ref ?? 'none'} ${placed?.dimensions.join('x') ?? ''}`,
         ),
       ];
     },

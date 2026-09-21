@@ -15,11 +15,19 @@ export const spatialSupported = () => native?.isSupported() ?? false;
 export const SpatialView = native
   ? requireNativeViewManager<
       ViewProps & {
-        mode: 'scan' | 'edit' | 'idle';
+        /**
+         * `rescan` adds another RoomPlan pass to the room being built instead of starting
+         * over. RoomPlan cannot see past about five metres, so a large room needs more than
+         * one standing position; the passes share one ARSession, so they share one world
+         * origin and `StructureBuilder` can reconcile them into a single room.
+         */
+        mode: 'scan' | 'rescan' | 'edit' | 'idle';
         /** Room origin in world coordinates. Native pins an ARAnchor here and reports its
          * live transform back on every frame, which is what corrects drift. */
         roomOrigin?: number[] | null;
-        onRoom: (e: { nativeEvent: { roomJSON: string; frameId: string } }) => void;
+        onRoom: (e: {
+          nativeEvent: { roomJSON: string; frameId: string; passes?: number };
+        }) => void;
         onFrame: (e: { nativeEvent: TrackedFrame }) => void;
         onStatus: (e: {
           nativeEvent: {

@@ -95,7 +95,32 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
   /// pinning the room's origin to an anchor and reading that anchor's CURRENT transform
   /// every frame, the correction is applied for free and the room stays put.
   private var roomAnchor: ARAnchor?
+
+  /**
+   Every scan of this room so far, in one world frame.
+
+   RoomPlan cannot see past roughly five metres, so a large room from one standing position
+   is a partial room no matter how patiently it is swept. Scanning again from somewhere else
+   and MERGING is the supported answer: `StructureBuilder` takes several `CapturedRoom`s and
+   returns one `CapturedStructure` with the duplicate walls reconciled.
+
+   The merge is only meaningful because every pass shares an ARSession, and therefore a
+   world origin. `RoomCaptureSession(arSession:)` is handed the existing session and nothing
+   here ever calls `resetTracking`, so pass two is already in pass one's coordinates and no
+   relocalization step is needed. Starting a fresh `ARSession` per pass would put each room
+   in its own origin and merge them into nonsense.
+   */
+  private var capturedRooms: [CapturedRoom] = []
   private var mode = "idle"
+  /**
+   What JS last asked for, which is not always what `mode` became.
+
+   `rescan` runs as `mode == "scan"` because every delegate, counter and finish path treats
+   the two identically. Guarding the entry point on `mode` would therefore compare a later
+   `scan` against the `scan` a `rescan` left behind, decide nothing had changed, and
+   silently refuse to start the fresh room the user asked for.
+   */
+  private var requestedMode = "idle"
   private var lastFrame: TimeInterval = 0
   private let handQueue = DispatchQueue(label: "reality.hand", qos: .userInitiated)
   private var processing = false
@@ -193,6 +218,10 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
     if window == nil { stop() }
   }
   private func stop() {
+    requestedMode = "idle"
+    // Leaving the room behind means leaving its passes behind: a later scan is a new room,
+    // not another view of this one.
+    capturedRooms.removeAll()
     invalidateTextureFrames()
     compositingInputsRequested = false
     generation += 1
@@ -232,13 +261,18 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
   }
 
   func setMode(_ next: String) {
-    guard next != mode else { return }
+    guard next != requestedMode else { return }
+    requestedMode = next
     if next == "idle" { stop(); return }
     guard RoomCaptureSession.isSupported else {
       onStatus(["code": "unsupported", "message": "Room measurement requires a supported LiDAR iPhone."])
       return
     }
-    if next == "scan" {
+    // `scan` starts a room; `rescan` adds a pass to the one being built. The only
+    // difference is whether the accumulated rooms survive, which is why they share
+    // everything below it.
+    if next == "scan" || next == "rescan" {
+      if next == "scan" { capturedRooms.removeAll() }
       invalidateTextureFrames()
       compositingInputsRequested = false
       generation += 1
@@ -249,8 +283,16 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
       resetScanProgress()
       capture = RoomCaptureSession(arSession: arSession)
       capture?.delegate = self
-      mode = next
-      onStatus(["code": "camera_transition", "message": "RoomPlan is requesting the rear camera."])
+      // Both passes run as "scan" from here on: the delegate, the progress counters and
+      // the finish path do not care which pass this is.
+      mode = "scan"
+      onStatus([
+        "code": "camera_transition",
+        "message": capturedRooms.isEmpty
+          ? "RoomPlan is requesting the rear camera."
+          : "Scanning again to extend the room. Walk to the part that was out of range.",
+        "pass": capturedRooms.count + 1,
+      ])
       capture?.run(configuration: RoomCaptureSession.Configuration())
     } else if next == "edit" {
       if mode == "processing" { return }
@@ -326,16 +368,45 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
     Task {
       do {
         let room = try await RoomBuilder(options: []).capturedRoom(from: data)
-        let surfaces = room.walls.map { surface($0, kind: "wall") }
-          + room.floors.map { surface($0, kind: "floor") }
-          + room.doors.map { surface($0, kind: "door") }
-          + room.windows.map { surface($0, kind: "window") }
-          + room.openings.map { surface($0, kind: "opening") }
-        let objects: [[String: Any]] = room.objects.map { object in
+        await MainActor.run { self.capturedRooms.append(room) }
+        let rooms = await MainActor.run { self.capturedRooms }
+
+        /*
+         ONE PASS IS A ROOM; SEVERAL ARE A STRUCTURE.
+
+         `StructureBuilder` is what reconciles them — the same wall seen from two positions
+         becomes one wall rather than two near-duplicates a metre apart, which is exactly
+         what naively concatenating the surfaces would produce. It is skipped for a single
+         pass because merging one room is pure cost: it is the slower of the two builders
+         and has nothing to reconcile.
+
+         `.beautifyObjects` is what makes a second pass worth taking. It squares up and
+         de-duplicates the merged result, so extra coverage improves the room instead of
+         just adding more approximate surfaces to it.
+         */
+        let merged: (walls: [CapturedRoom.Surface], floors: [CapturedRoom.Surface],
+                     doors: [CapturedRoom.Surface], windows: [CapturedRoom.Surface],
+                     openings: [CapturedRoom.Surface], objects: [CapturedRoom.Object], id: UUID)
+        if rooms.count > 1 {
+          let structure = try await StructureBuilder(options: [.beautifyObjects])
+            .capturedStructure(from: rooms)
+          merged = (structure.walls, structure.floors, structure.doors, structure.windows,
+                    structure.openings, structure.objects, structure.identifier)
+        } else {
+          merged = (room.walls, room.floors, room.doors, room.windows,
+                    room.openings, room.objects, room.identifier)
+        }
+
+        let surfaces = merged.walls.map { surface($0, kind: "wall") }
+          + merged.floors.map { surface($0, kind: "floor") }
+          + merged.doors.map { surface($0, kind: "door") }
+          + merged.windows.map { surface($0, kind: "window") }
+          + merged.openings.map { surface($0, kind: "opening") }
+        let objects: [[String: Any]] = merged.objects.map { object in
           ["id": object.identifier.uuidString, "category": String(describing: object.category),
            "transform": array(object.transform), "dimensions": [object.dimensions.x, object.dimensions.y, object.dimensions.z]]
         }
-        let encoded = try JSONSerialization.data(withJSONObject: ["id": room.identifier.uuidString, "surfaces": surfaces, "objects": objects])
+        let encoded = try JSONSerialization.data(withJSONObject: ["id": merged.id.uuidString, "surfaces": surfaces, "objects": objects])
         let json = String(data: encoded, encoding: .utf8) ?? "{}"
         await MainActor.run {
           // A superseded scan's result is dropped, but NOT silently: this used to
@@ -350,8 +421,14 @@ final class SpatialCaptureView: ExpoView, RoomCaptureSessionDelegate, ARSCNViewD
             return
           }
           self.mode = "edit"
-          self.onStatus(["code": "camera_owner", "message": "Tracked editing retained the RoomPlan AR session."])
-          self.onRoom(["roomJSON": json, "frameId": self.frameId])
+          self.onStatus([
+            "code": "camera_owner",
+            "message": rooms.count > 1
+              ? "Merged \(rooms.count) scans into one room. Tracked editing retained the AR session."
+              : "Tracked editing retained the RoomPlan AR session.",
+            "passes": rooms.count,
+          ])
+          self.onRoom(["roomJSON": json, "frameId": self.frameId, "passes": rooms.count])
         }
       } catch {
         await MainActor.run {

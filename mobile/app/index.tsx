@@ -7,8 +7,6 @@ import { sampleRoom } from '@reality/dev-scenarios';
 import { EditorPanel } from '../src/components/EditorPanel';
 import { createEditor, type Editor } from '../src/runtime/editor';
 import { loadObjectCatalog } from '../src/adapters/object-catalog';
-import { requestStylePlan } from '../src/adapters/plan-style';
-import { defaultEditorModules } from '../src/runtime/editor';
 import {
   SpatialView,
   spatialSupported,
@@ -35,6 +33,8 @@ export default function Home() {
     | 'welcome'
     | 'observing'
     | 'needs_view'
+    /** Room built, not yet committed to an editor. The only point a second pass is safe. */
+    | 'scanned'
     | 'reconstructing'
     | 'failed'
     | 'edit'
@@ -54,6 +54,30 @@ export default function Home() {
   const scanning = useRef(false);
   // The converted room waiting on the user's answer to a "needs another view" prompt.
   const pendingRoom = useRef<ReturnType<typeof roomToSession> | null>(null);
+  /**
+   * True when the next sweep EXTENDS the room rather than replacing it.
+   *
+   * RoomPlan reaches about five metres, so one standing position cannot measure a large
+   * room however patiently it is swept. A second pass from somewhere else is merged with
+   * the first by `StructureBuilder` on the native side — valid only because both passes
+   * share one ARSession and therefore one world origin.
+   */
+  /**
+   * The last anchor transform ARKit actually reported.
+   *
+   * `roomAnchor` is only in a frame's payload when ARKit has the anchor registered in
+   * THAT frame — it is absent for the frames right after the anchor is added, and during
+   * relocalisation. `roomFromWorld` falls back to the static origin when it is missing,
+   * and that origin is a snapshot from conversion time: correct once, wrong the moment
+   * ARKit revises its map. So a missing anchor did not degrade gracefully, it SNAPPED the
+   * whole room between two different poses from one frame to the next, which is what
+   * placed objects refusing to stay put actually looks like.
+   *
+   * Holding the last known transform is strictly better than reverting to a stale one.
+   */
+  const lastAnchor = useRef<number[] | undefined>(undefined);
+  const addingPass = useRef(false);
+  const [passes, setPasses] = useState(0);
   // The raw capture, kept so a development build can write it out as a gate fixture.
   const lastCapture = useRef<{ roomJSON: string; mask: CoverageMask } | null>(null);
   // Which capture this is within the app session, so `calibrationRevision` is a real value
@@ -129,7 +153,7 @@ export default function Home() {
     origin.current = converted.origin;
     setAnchored(true);
     pendingRoom.current = null;
-    const created = createEditor(converted.scene, { ...defaultEditorModules, requestStylePlan });
+    const created = createEditor(converted.scene);
     setEditor(created);
     setDetached(false);
     // Straight in. Voice comes up on its own with the editor, so the sweep ends and the
@@ -176,6 +200,12 @@ export default function Home() {
     setRoomCoverage({ walls: 0, floors: 0, openings: 0 });
     setRoomDegrees(0);
     coverage.current.reset();
+    // A new room means a new anchor. Carrying the old one would align the new room to
+    // the previous room's origin.
+    lastAnchor.current = undefined;
+    // A new room is not another view of the old one.
+    addingPass.current = false;
+    setPasses(0);
     setObservedFraction(0);
     setFailure('');
     setAnchored(false);
@@ -198,6 +228,7 @@ export default function Home() {
   return (
     <SafeAreaView style={styles.root}>
       {(phase === 'observing' || phase === 'needs_view' ||
+        phase === 'scanned' ||
         phase === 'reconstructing' ||
         phase === 'failed' ||
         (phase === 'edit' && editor?.engine.getSnapshot().scene.provenance !== 'sample')) &&
@@ -212,7 +243,7 @@ export default function Home() {
             // RoomCaptureSession, which mints a new `frameId`. The scene was built with the
             // old one, and `resolveHand` refuses any frame whose id does not match the
             // scene, so the hand cursor silently stopped targeting anything at all.
-            mode={phase === 'observing' ? 'scan' : 'edit'}
+            mode={phase === 'observing' ? (addingPass.current ? 'rescan' : 'scan') : 'edit'}
             // Set once the room exists. Native anchors the origin and reports the anchor's
             // current transform every frame, so the room follows ARKit's corrections
             // instead of staying pinned to a world estimate that keeps changing.
@@ -274,6 +305,10 @@ export default function Home() {
             }}
             onFrame={(e) => {
               const received = { ...e.nativeEvent, receivedAt: Date.now() };
+              // Sticky: carry the last real anchor onto frames that arrive without one,
+              // rather than letting them fall back to the stale static origin.
+              if (received.roomAnchor?.length === 16) lastAnchor.current = received.roomAnchor;
+              else if (lastAnchor.current) received.roomAnchor = lastAnchor.current;
               if (received.hand) handFrame.current = received;
               if (!frame.current || received.timestamp >= frame.current.timestamp)
                 frame.current = received;
@@ -297,6 +332,7 @@ export default function Home() {
                   captureCount.current++,
                 );
                 lastCapture.current = { roomJSON: e.nativeEvent.roomJSON, mask };
+                setPasses(e.nativeEvent.passes ?? 1);
                 pendingRoom.current = converted;
                 setObservedFraction(converted.coverage?.observedFraction ?? 0);
                 // A boundary nobody looked at is worth asking about before committing to a
@@ -306,7 +342,19 @@ export default function Home() {
                   setPhase('needs_view');
                   return;
                 }
-                useRoom(converted);
+                // STOP HERE RATHER THAN ENTERING THE EDITOR.
+                //
+                // A second RoomPlan pass is only safe before the room is committed: the
+                // origin is the floor-polygon centroid, so extending the floor MOVES it,
+                // and anything already placed would shift with it. Going straight in left
+                // no moment at which another pass could be offered, which is why a room
+                // could only ever be swept once.
+                setMessage(
+                  converted.coverage?.status === 'ready'
+                    ? 'Room measured. Add another area if part of it was out of range.'
+                    : 'Room measured.',
+                );
+                setPhase('scanned');
               } catch (error) {
                 setFailure(error instanceof Error ? error.message : 'Unable to use this room.');
                 setPhase('failed');
@@ -316,6 +364,7 @@ export default function Home() {
         )}
       {(phase === 'observing' ||
         phase === 'needs_view' ||
+        phase === 'scanned' ||
         phase === 'reconstructing' ||
         phase === 'failed') && (
         <View style={styles.hud} pointerEvents="box-none">
@@ -324,7 +373,9 @@ export default function Home() {
               development sheet, where the people who need them already look. */}
           <GlassPanel style={styles.card}>
             <Text style={styles.title}>
-              {phase === 'needs_view'
+              {phase === 'scanned'
+                ? 'Room measured'
+                : phase === 'needs_view'
                 ? 'One more view'
                 : phase === 'failed'
                   ? 'Measurement stopped'
@@ -362,8 +413,12 @@ export default function Home() {
                   label="Keep scanning"
                   onPress={() => {
                     pendingRoom.current = null;
+                    // EXTEND, do not restart. Walking to the missing boundary and sweeping
+                    // again is the only way to measure what was out of RoomPlan's range
+                    // from the first position, and the passes merge into one room.
+                    addingPass.current = true;
                     setPhase('observing');
-                    setMessage('Turn toward the boundary that is still missing.');
+                    setMessage('Walk toward the boundary that is still missing, then sweep again.');
                   }}
                 />
                 {/* Never a locked door: missing geometry becomes an inferred label. */}
@@ -373,6 +428,28 @@ export default function Home() {
                   onPress={() => pendingRoom.current && useRoom(pendingRoom.current)}
                 />
               </>
+            )}
+            {/* Coverage says every boundary was FACED; it cannot say they were close
+                enough to measure well. A room bigger than RoomPlan's reach needs a second
+                position, so the offer stands even when the sweep is judged complete. */}
+            {(phase === 'scanned' || phase === 'needs_view') && (
+              <GlassPill
+                label={passes > 1 ? `Scan another area (${passes} merged)` : 'Scan another area'}
+                tone="quiet"
+                onPress={() => {
+                  // Keep the built room as the pending one: if the next pass fails, the
+                  // user still has something to accept rather than nothing.
+                  addingPass.current = true;
+                  setPhase('observing');
+                  setMessage('Walk to the part that was out of range, then sweep again.');
+                }}
+              />
+            )}
+            {phase === 'scanned' && (
+              <GlassPill
+                label="Use this room"
+                onPress={() => pendingRoom.current && useRoom(pendingRoom.current)}
+              />
             )}
             {phase === 'failed' ? (
               <GlassPill
@@ -384,7 +461,8 @@ export default function Home() {
                 }}
               />
             ) : (
-              phase !== 'needs_view' && (
+              phase !== 'needs_view' &&
+              phase !== 'scanned' && (
                 <GlassPill
                   label={phase === 'reconstructing' ? 'Building room…' : 'Finish now'}
                   disabled={phase === 'reconstructing'}
@@ -466,14 +544,14 @@ export default function Home() {
               onLongPress={
                 __DEV__
                   ? () => {
-                      setEditor(createEditor(sampleRoom(), { ...defaultEditorModules, requestStylePlan }));
+                      setEditor(createEditor(sampleRoom()));
                       setPhase('edit');
                     }
                   : undefined
               }
               delayLongPress={600}
             >
-              <Text style={styles.wordmark}>Reality Editor</Text>
+              <Text style={styles.wordmark}>Dex</Text>
             </Pressable>
             <Text style={styles.text}>Make room for something new.</Text>
           </View>

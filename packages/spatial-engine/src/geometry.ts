@@ -249,7 +249,7 @@ function clipConvex(subject: P2[], clip: P2[]): P2[] {
   return output;
 }
 
-function area(polygon: P2[]): number {
+export function area(polygon: P2[]): number {
   return Math.abs(signedArea(polygon));
 }
 
@@ -321,8 +321,15 @@ function bearsLoad(kind: SceneObject['class']): boolean {
     case 'shelf':
     case 'dishwasher':
     case 'washerDryer':
+    // Appliances with a real flat top. Omitting them only ever cost a refusal, and a
+    // scan of a kitchen produces them constantly.
+    case 'refrigerator':
+    case 'oven':
+    case 'stove':
+    case 'fireplace':
+    case 'television':
       return true;
-    // Beds and sofas are soft, chairs are for sitting, and a hob or basin is not a shelf.
+    // Beds and sofas are soft, chairs are for sitting, and a basin is not a shelf.
     default:
       return false;
   }
@@ -365,7 +372,7 @@ export function bearingIsDerived(scene: EditorState, object: ObjectLike): boolea
   return scene.assemblies[object.id]?.support?.bearing === undefined && bearsLoad(object.class);
 }
 
-function worldBearing(
+export function worldBearing(
   scene: EditorState,
   object: ObjectLike,
   bearing: Bearing | null,

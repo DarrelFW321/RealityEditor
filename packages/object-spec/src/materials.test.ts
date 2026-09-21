@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { materialFromSpec } from './materials.js';
-import { interpretPrompt } from './spec.js';
+import { materialFromSpec } from './materials';
+import { interpretPrompt } from './spec';
 
 test('uses painted wood for colored furniture', () => {
   const material = materialFromSpec(interpretPrompt({ prompt: 'a large blue shelf' }));

@@ -89,7 +89,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Reality Editor reconstruction worker")
+    parser = argparse.ArgumentParser(description="Dex reconstruction worker")
     parser.add_argument("--port", type=int, default=int(os.environ.get("WORKER_PORT", 8788)))
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--dump", type=Path, help="write every stage's output here")

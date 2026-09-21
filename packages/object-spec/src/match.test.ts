@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CATALOG_THRESHOLD, matchCatalog, scoreEntry, type CatalogEntry } from './match.js';
-import { interpretPrompt } from './spec.js';
-import { materialFromSpec } from './materials.js';
+import { CATALOG_THRESHOLD, matchCatalog, scoreEntry, type CatalogEntry } from './match';
+import { interpretPrompt } from './spec';
+import { materialFromSpec } from './materials';
 
 const ENTRIES: CatalogEntry[] = [
   {

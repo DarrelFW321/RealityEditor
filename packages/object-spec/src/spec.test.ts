@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { interpretPrompt, parseObjectRequest } from './spec.js';
+import { interpretPrompt, parseObjectRequest } from './spec';
 
 test('interprets the motivating shelf prompt', () => {
   const spec = interpretPrompt({ prompt: 'Create a large blue shelf with four empty compartments' });

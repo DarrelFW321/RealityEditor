@@ -1,6 +1,6 @@
 > Expo migration: see [mobile setup](mobile/README.md), [implementation status](docs/expo-implementation-status.md), and [plan](docs/implementation-plan-expo.md). Install from this directory with `npm ci`; the workspace root lockfile now owns server and mobile dependencies. The original Swift app remains available below.
 
-# Reality Editor
+# Dex
 
 Scan a room with LiDAR. Point your phone at things and talk. The room changes.
 

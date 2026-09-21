@@ -159,7 +159,7 @@ NON_TEXTURE_KEYS = {"blend", "gltf", "usd", "fbx"}
 # MARK: - Fetching
 
 # The API refuses Python's default User-Agent with a 403. Say who we are.
-USER_AGENT = "reality-editor-catalog/1.0 (+https://github.com/Poly-Haven/Public-API)"
+USER_AGENT = "dex-catalog/1.0 (+https://github.com/Poly-Haven/Public-API)"
 
 
 def request(url):

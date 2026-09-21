@@ -1,7 +1,7 @@
 import type { ExpoConfig } from 'expo/config';
 const development = process.env.APP_VARIANT !== 'production';
 const config: ExpoConfig = {
-  name: development ? 'Reality Editor Dev' : 'Reality Editor',
+  name: development ? 'Dex Dev' : 'Dex',
   slug: 'reality-editor',
   scheme: 'reality-editor',
   version: '0.1.0',
@@ -35,7 +35,7 @@ const config: ExpoConfig = {
   },
   plugins: [
     'expo-router',
-    ['expo-sensors', { motionPermission: 'Allow Reality Editor to measure your 360-degree room sweep.' }],
+    ['expo-sensors', { motionPermission: 'Allow Dex to measure your 360-degree room sweep.' }],
     '@config-plugins/react-native-webrtc',
     ['expo-build-properties', { ios: { deploymentTarget: '17.0' } }],
   ],

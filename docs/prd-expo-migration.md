@@ -1,4 +1,4 @@
-# Reality Editor — Expo implementation and architecture PRD
+# Dex — Expo implementation and architecture PRD
 
 Status: proposed, revised after product feedback. Research date: 2026-09-18.
 

@@ -6,13 +6,13 @@ export {
   type DimensionsSource,
   type ObjectSpec,
   type SizeClass,
-} from './spec.js';
+} from './spec';
 
 export {
   materialFromSpec,
   type MaterialFamily,
   type ObjectMaterial,
-} from './materials.js';
+} from './materials';
 
 export {
   buildObjectPrompt,
@@ -22,7 +22,7 @@ export {
   type ResolvedSize,
   type SizeInput,
   type SizePreset,
-} from './prompts.js';
+} from './prompts';
 
 export {
   matchCatalog,
@@ -31,4 +31,4 @@ export {
   type CatalogEntry,
   type CatalogMatch,
   type ScoredEntry,
-} from './match.js';
+} from './match';

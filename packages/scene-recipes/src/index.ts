@@ -30,6 +30,14 @@ export function buildObject(
   supportSurface: string,
   /** Structural class. Independent of `recipe.color`, which is cosmetic only. */
   materialClass: MaterialClass = 'engineered_panel',
+  /**
+   * How this object is held up, overriding what the family would imply.
+   *
+   * The family is a good default and a poor rule: `frame` normally hangs, but a painting
+   * propped on the floor and a television resting on a cabinet are both ordinary things
+   * to ask for. When the caller states the support explicitly, that is the answer.
+   */
+  mode?: 'floor' | 'wall' | 'object',
 ): { object: SceneObject; assembly: Assembly } {
   const recipe = RecipeSchema.parse(input);
   const [w, h, d] = recipe.dimensions;
@@ -40,7 +48,7 @@ export function buildObject(
   const join = (from: string, to: string, kind: Connection['kind']) =>
     connections.push({ from, to, kind });
   const supports: [number, number][] = [];
-  const mounted = recipe.family === 'frame' || recipe.family === 'shelf';
+  const mounted = mode ? mode === 'wall' : recipe.family === 'frame' || recipe.family === 'shelf';
   if (recipe.family === 'bed' || recipe.family === 'table') {
     const top = Math.min(h * 0.25, recipe.family === 'bed' ? 0.2 : 0.08);
     const leg = Math.min(w, d) * 0.1;
@@ -152,7 +160,7 @@ export function buildObject(
       mounting: mounted ? 'wall' : 'floor',
       supportSurface,
       support: {
-        mode: mounted ? 'wall' : 'floor',
+        mode: mode ?? (mounted ? 'wall' : 'floor'),
         surfaceId: supportSurface,
         bearing,
         mountHeight: mounted ? (position[1] ?? null) : null,

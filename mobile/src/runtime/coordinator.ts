@@ -432,7 +432,37 @@ export class InputCoordinator {
    * restyle and a simple edit are both writes to the one engine, and two queues would
    * be two writers with no ordering between them.
    */
+  /**
+   * A hard-coded design, run on the same queue as everything else.
+   *
+   * Delegates to `restyle`'s machinery by construction: same queue, same idempotency
+   * cache, same turn resolution. A design is many writes to the one engine, so it must
+   * not be a second writer racing the first.
+   */
+  async design(
+    choice: unknown,
+    options: { turnId?: string; callId?: string; source?: InputSource } = {},
+    onStage?: (stage: string) => void,
+  ): Promise<EditResult> {
+    return this.runPlanned((recipeInput, context, stage) =>
+      this.editor.agentChoice(recipeInput, context, undefined, stage), choice, options, onStage);
+  }
+
   async restyle(
+    recipe: unknown,
+    options: { turnId?: string; callId?: string; source?: InputSource } = {},
+    onStage?: (stage: string) => void,
+  ): Promise<EditResult> {
+    return this.runPlanned((recipeInput, context, stage) =>
+      this.editor.restyle(recipeInput, context, undefined, stage), recipe, options, onStage);
+  }
+
+  private async runPlanned(
+    execute: (
+      input: unknown,
+      context: InteractionContext,
+      onStage?: (stage: string) => void,
+    ) => Promise<EditResult>,
     recipe: unknown,
     options: { turnId?: string; callId?: string; source?: InputSource } = {},
     onStage?: (stage: string) => void,
@@ -455,7 +485,7 @@ export class InputCoordinator {
         turnId: turnId ?? null,
         source: options.source === 'voice' ? 'voice' : options.source === 'system' ? 'system' : 'tap',
       });
-      const result = await this.editor.restyle(recipe, context, undefined, onStage);
+      const result = await execute(recipe, context, onStage);
       this.editor.engine.attribute({ turnId: null, source: 'system' });
       if (turnId && result.refusal === 'awaiting_confirmation') {
         const record = this.turns.get(turnId);

@@ -12,8 +12,8 @@ import type {
   EditResult,
 } from '@reality/contracts';
 import { isAmbiguous } from '@reality/spatial-engine';
-import { recipeTool, voiceTool, VOICE_INSTRUCTIONS } from '../runtime/editor';
-import { catalogMenu } from '../runtime/object-catalog';
+import { agentChoiceTool, recipeTool, voiceTool, VOICE_INSTRUCTIONS } from '../runtime/editor';
+import { catalogIds, catalogMenu, onObjectCatalogChange } from '../runtime/object-catalog';
 import type { InputCoordinator } from '../runtime/coordinator';
 
 /**
@@ -26,7 +26,41 @@ import type { InputCoordinator } from '../runtime/coordinator';
  */
 export type VoiceActivity = 'offline' | 'connecting' | 'muted' | 'listening' | 'hearing' | 'thinking' | 'replying';
 
+/**
+ * The static prompt plus whatever the catalog currently holds.
+ *
+ * Appended per session rather than baked into VOICE_INSTRUCTIONS: the catalog changes,
+ * the prompt does not. An empty catalog sends the prompt alone, so an unreachable
+ * server degrades to the procedural families rather than advertising ids that would
+ * not resolve.
+ */
+function listeningStatus(): string {
+  const count = catalogIds().length;
+  return count
+    ? `Listening. ${count} catalog objects.`
+    : 'Listening. No catalog reached the app — basic shapes only.';
+}
+
+function instructionsWithCatalog(): string {
+  const menu = catalogMenu();
+  return menu
+    ? `${VOICE_INSTRUCTIONS}\n\nPre-built objects available as catalog_id on the add action, to be preferred over family when one of them is what was asked for: ${menu}.`
+    : VOICE_INSTRUCTIONS;
+}
+
+/**
+ * Playback gain for the assistant's voice, on react-native-webrtc's 0-10 scale.
+ *
+ * 1.0 is the library default and is too quiet to hear across a room over the PlayAndRecord
+ * category. Held well below the ceiling: gain applied after the fact clips rather than
+ * compresses, and a distorted instruction is worse than a quiet one.
+ */
+const OUTPUT_GAIN = 4;
+
 export class RealtimeVoice implements VoiceAdapter {
+  private unsubscribeCatalog: (() => void) | null = null;
+  /** The assistant's audio track, held only so its gain can be set. */
+  private remoteAudio: MediaStreamTrack | null = null;
   readonly id = 'openai-realtime-webrtc';
   readonly capabilities = ['audio', 'edit-tools'];
   private muted = false;
@@ -81,6 +115,17 @@ export class RealtimeVoice implements VoiceAdapter {
    * so there is nothing to copy in: this used to be a per-frame deep clone whose only
    * readers were the two turn-boundary handlers. */
   setContext(_context: InteractionContext) {}
+  /** Non-standard by necessity; never allowed to take the session down with it. */
+  private applyOutputGain() {
+    const track = this.remoteAudio as (MediaStreamTrack & { _setVolume?: (v: number) => void }) | null;
+    if (typeof track?._setVolume !== 'function') return;
+    try {
+      track._setVolume(OUTPUT_GAIN);
+    } catch {
+      // Audible at the default gain is still audible.
+    }
+  }
+
   private send(event: unknown) {
     if (this.channel?.readyState === 'open') this.channel.send(JSON.stringify(event));
   }
@@ -148,6 +193,28 @@ export class RealtimeVoice implements VoiceAdapter {
       if (this.muted) stream.getAudioTracks().forEach((track) => { track.enabled = false; });
       const peer = new RTCPeerConnection();
       this.peer = peer;
+
+      /**
+       * The reply is audible.
+       *
+       * WebRTC plays the remote track by itself on iOS, so nothing here was ever wrong —
+       * but nothing held a reference to it either, which meant its gain could not be
+       * touched. The session runs under the PlayAndRecord category the microphone
+       * requires, and that category favours the receiver over the loudspeaker, so the
+       * reply arrives far quieter than media playback would.
+       *
+       * `_setVolume` is react-native-webrtc's own extension (gain 0-10, default 1) and is
+       * the only lever the library exposes for this; it deliberately accepts remote
+       * tracks. Guarded because a non-standard API is exactly the kind that disappears in
+       * a version bump, and a quiet assistant is a far better failure than a silent one.
+       */
+      peer.ontrack = (event: unknown) => {
+        const track = (event as { track?: MediaStreamTrack }).track;
+        if (!track || track.kind !== 'audio') return;
+        this.remoteAudio = track;
+        this.applyOutputGain();
+      };
+
       stream.getTracks().forEach((track) => peer.addTrack(track, stream));
       const channel = peer.createDataChannel('oai-events');
       this.channel = channel;
@@ -158,7 +225,7 @@ export class RealtimeVoice implements VoiceAdapter {
             type: 'realtime',
             // Two tools: one simple edit, one whole arrangement. M7.6 keeps them
             // separate so a "move that left" never has to carry a creation schema.
-            tools: [voiceTool, recipeTool],
+            tools: [voiceTool, recipeTool, agentChoiceTool],
             tool_choice: 'auto',
             audio: {
               input: {
@@ -169,15 +236,26 @@ export class RealtimeVoice implements VoiceAdapter {
                 },
               },
             },
-            // The model cannot ask for a pre-built object it has never been told
-            // exists, so the menu is appended per session rather than baked into
-            // the static instructions — the catalog changes, the prompt does not.
-            instructions: catalogMenu()
-              ? `${VOICE_INSTRUCTIONS}\n\nPre-built objects available as catalog_id on the add action, to be preferred over family when one of them is what was asked for: ${catalogMenu()}.`
-              : VOICE_INSTRUCTIONS,
+            instructions: instructionsWithCatalog(),
           },
         });
-        this.status('Listening.');
+        // Re-sent when the catalog arrives. It is fetched asynchronously at startup, so
+        // it can land after this channel opens; a menu fixed at open left the model
+        // unable to name a lamp or a television, which have no `family` to fall back on.
+        this.unsubscribeCatalog?.();
+        this.unsubscribeCatalog = onObjectCatalogChange(() => {
+          this.send({
+            type: 'session.update',
+            session: { type: 'realtime', instructions: instructionsWithCatalog() },
+          });
+          this.status(listeningStatus());
+        });
+        // SAID OUT LOUD, because an empty catalog is otherwise invisible until the
+        // model is asked for something only the catalog has. A lamp and a television
+        // are not `family` values, so with no menu they cannot be expressed at all and
+        // the model falls back to asking which family to use — a question the user has
+        // no way to answer. Showing the count turns that into a one-glance diagnosis.
+        this.status(listeningStatus());
         this.setActivity('listening');
       };
       channel.onmessage = (event: { data: unknown }) => {
@@ -300,7 +378,9 @@ export class RealtimeVoice implements VoiceAdapter {
     }
     if (
       event.type === 'response.function_call_arguments.done' &&
-      (event.name === 'edit_room' || event.name === 'restyle_room')
+      (event.name === 'edit_room' ||
+        event.name === 'restyle_room' ||
+        event.name === 'agent_choice')
     ) {
       const record = this.input.turnForResponse(String(event.response_id));
       const id = String(event.call_id);
@@ -315,7 +395,14 @@ export class RealtimeVoice implements VoiceAdapter {
       // The coordinator serialises execution and caches by call id, so a duplicate
       // delivery returns the original result without running anything.
       const result =
-        event.name === 'restyle_room'
+        event.name === 'agent_choice'
+          ? await this.input.design(
+              parsed,
+              { turnId: record?.turnId, callId: id, source: 'voice' },
+              (stage) =>
+                this.status(stage === 'planning' ? 'Furnishing the room…' : 'Design placed.'),
+            )
+          : event.name === 'restyle_room'
           ? await this.input.restyle(
               parsed,
               { turnId: record?.turnId, callId: id, source: 'voice' },
@@ -358,6 +445,9 @@ export class RealtimeVoice implements VoiceAdapter {
   async stop() {
     this.controller?.abort();
     this.controller = null;
+    this.unsubscribeCatalog?.();
+    this.unsubscribeCatalog = null;
+    this.remoteAudio = null;
     this.channel?.close();
     this.channel = null;
     this.peer?.close();

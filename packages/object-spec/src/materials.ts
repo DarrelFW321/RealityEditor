@@ -1,4 +1,4 @@
-import type { ObjectSpec } from './spec.js';
+import type { ObjectSpec } from './spec';
 
 export type MaterialFamily =
   | 'painted_wood' | 'wood' | 'fabric' | 'leather'

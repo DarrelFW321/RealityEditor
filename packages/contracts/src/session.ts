@@ -660,6 +660,14 @@ export const RecipeItemSchema = z
     surfaceId: z.string().nullable().default(null),
     /** Set when a follow-up edit re-plans an existing group instead of creating one. */
     groupId: z.string().nullable().default(null),
+    /**
+     * A pre-built catalog object this item stands for, if any.
+     *
+     * `family` stays required and keeps its full meaning: it is the collision volume the
+     * solver reasons about and the shape drawn if the mesh cannot be fetched. This only
+     * records that a real asset exists to draw on top of it.
+     */
+    catalogId: z.string().max(80).nullable().default(null),
   })
   .strict();
 export type RecipeItem = z.infer<typeof RecipeItemSchema>;
@@ -707,6 +715,8 @@ export const ProposalPlacementSchema = z
     supportSurface: z.string(),
     mode: z.enum(['floor', 'wall']),
     construction: ConstructionResultSchema,
+    /** Carried from the recipe item so the applied object can reference its mesh. */
+    catalogId: z.string().max(80).nullable().default(null),
   })
   .strict();
 export type ProposalPlacement = z.infer<typeof ProposalPlacementSchema>;

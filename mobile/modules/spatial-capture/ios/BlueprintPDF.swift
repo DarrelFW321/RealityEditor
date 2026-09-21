@@ -201,7 +201,7 @@ enum BlueprintPDF {
     let format = UIGraphicsPDFRendererFormat()
     format.documentInfo = [
       kCGPDFContextTitle as String: title,
-      kCGPDFContextCreator as String: "Reality Editor",
+      kCGPDFContextCreator as String: "Dex",
       kCGPDFContextSubject as String: "Floor plan at \(sheet.scaleLabel)",
     ]
     let bounds = CGRect(x: 0, y: 0, width: sheet.width, height: sheet.height)

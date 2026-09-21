@@ -74,7 +74,7 @@ def download(url, local, attempts=5):
     request = urllib.request.Request(url, headers={
         # An anonymous default urllib UA is itself a reason HF throttles
         # harder; identifying the client is not just politeness here.
-        "User-Agent": "reality-editor/fetch_lama.py (+https://github.com)"})
+        "User-Agent": "dex/fetch_lama.py (+https://github.com)"})
     for attempt in range(1, attempts + 1):
         try:
             with urllib.request.urlopen(request) as response, open(local, "wb") as f:

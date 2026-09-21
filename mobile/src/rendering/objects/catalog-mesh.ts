@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Box3, Vector3, type Group } from 'three';
 import type { GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { apiURL } from '../../runtime/api-url';
@@ -56,20 +56,42 @@ export function useCatalogMesh(assetRef: string | null | undefined, size: [numbe
     };
   }, [sha]);
 
-  if (!gltf) return null;
+  /**
+   * ONE NODE PER OBJECT, sharing one decode.
+   *
+   * An Object3D has exactly one parent. Handing the cached `gltf.scene` straight to two
+   * `<primitive>` elements therefore did not draw it twice — the second mount REPARENTED
+   * it and the first silently lost its mesh, so two of the same catalog object made each
+   * other jump around the room. Cloning gives each instance its own transform node while
+   * three keeps the geometry and materials shared by reference, which is where the eight
+   * megabytes actually live, so the cache's whole purpose survives.
+   */
+  const scene = useMemo(() => (gltf ? (gltf.scene.clone() as Group) : null), [gltf]);
+
+  /**
+   * Measured once per clone rather than on every render.
+   *
+   * `setFromObject` walks the entire hierarchy. It was being run for every catalog object
+   * on every re-render — and re-renders are frequent, because selection and destination
+   * update at hand-tracking rate whenever voice is live.
+   */
+  const measured = useMemo(() => {
+    if (!scene) return null;
+    const bounds = new Box3().setFromObject(scene);
+    const size3 = bounds.getSize(new Vector3());
+    const longest = Math.max(size3.x, size3.y, size3.z);
+    if (!Number.isFinite(longest) || longest <= 0) return null;
+    return { longest, centre: bounds.getCenter(new Vector3()), minY: bounds.min.y };
+  }, [scene]);
+
+  if (!scene || !measured) return null;
 
   // Uniform, never per-axis: stretching a mesh to a bounding box distorts both the
   // geometry and the baked texture. The declared size wins on the longest axis.
-  const bounds = new Box3().setFromObject(gltf.scene);
-  const measured = bounds.getSize(new Vector3());
-  const longestMeasured = Math.max(measured.x, measured.y, measured.z);
-  if (!Number.isFinite(longestMeasured) || longestMeasured <= 0) return null;
-  const scale = Math.max(size[0], size[1], size[2]) / longestMeasured;
-
-  const centre = bounds.getCenter(new Vector3());
+  const scale = Math.max(size[0], size[1], size[2]) / measured.longest;
   return {
-    scene: gltf.scene as Group,
+    scene,
     scale,
-    offset: [-centre.x * scale, -bounds.min.y * scale, -centre.z * scale],
+    offset: [-measured.centre.x * scale, -measured.minY * scale, -measured.centre.z * scale],
   };
 }

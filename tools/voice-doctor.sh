@@ -29,7 +29,7 @@ bad()  { printf '%s FAIL%s  %s\n' "$RED" "$OFF" "$1"; FAILED=1; }
 fix()  { printf '%s       -> %s%s\n' "$DIM" "$1" "$OFF"; }
 
 echo
-echo "voice doctor — reality-editor"
+echo "voice doctor — dex"
 echo "────────────────────────────────────────────────────────"
 
 # ── 1. server/.env exists ───────────────────────────────────────────────────

@@ -4,19 +4,23 @@ import {
   DEFAULT_COLOR,
   DEFAULT_DIMENSIONS,
   SpatialEngine,
+  bearingFor,
   isWallFamily,
   planLayoutCooperative,
   wallFacingYaw,
+  worldBearing,
 } from '@reality/spatial-engine';
 import { buildObject, revalidate } from '@reality/scene-recipes';
 import { catalogEntry } from './object-catalog';
-import { expandLegacyPlan, type LegacyPlan } from './legacy-style';
+import { DESIGN_IDS, designById, orderedItems } from './designs';
 import {
+  RecipeItemSchema,
   RecipeSchema,
   SceneRecipeSchema,
   type EditorState,
   type InteractionContext,
   type LayoutProposal,
+  type RecipeItem,
   type SceneRecipe,
   type Vec3,
   type EditResult,
@@ -106,6 +110,18 @@ export const IntentSchema = z
      * not in that list falls through to the family path.
      */
     catalog_id: z.string().max(80).optional(),
+    /**
+     * Where a new object is held up, stated rather than inferred.
+     *
+     * Omitted, the family decides and the destination is read from what the user is
+     * pointing at — the original behaviour. Supplied, it is obeyed: "on the floor" puts
+     * a painting on the floor, "on the wall" mounts something that normally stands, and
+     * "object" rests it on `support_id`. The geometry is still checked either way; this
+     * only chooses WHICH support the solver has to satisfy.
+     */
+    support: z.enum(['floor', 'wall', 'object']).optional(),
+    /** The object to rest on, for `support: "object"`. An id from the context, never invented. */
+    support_id: z.string().optional(),
     count: z.number().int().min(1).max(12).optional(),
     legs: z.union([z.literal(3), z.literal(4)]).optional(),
     structure_kind: z.enum(['offset_wall', 'ceiling_height', 'resize_opening']).optional(),
@@ -211,13 +227,15 @@ export type RecipeIntent = z.infer<typeof RecipeIntentSchema>;
  * its vocabulary matched the request, so it filled the gap itself.
  */
 export const VOICE_INSTRUCTIONS = [
-  'You are Dex, the voice of this spatial editor. Use edit_room for single',
-  'changes and restyle_room for a whole arrangement.',
+  'You are Dex. You control a spatial editor. Use edit_room for single changes',
+  'and restyle_room for a whole arrangement.',
   '',
-  'They say your name to get your attention — "Dex, move that left". It is',
-  'never part of the request; there is no object called Dex. Speak like a',
-  'person: one short sentence per action, no preamble. A plain question about',
-  'the room is answered from the context you were given, not with a tool call.',
+  // The name only, deliberately. An earlier version added a register instruction here
+  // ("speak like a person") and a licence to answer questions from context instead of
+  // acting; together they made every reply conversational. The rest of this prompt is
+  // written to be instructive, and the name does not need any of that to work.
+  'They say your name to get your attention — "Dex, move that left". It is never',
+  'part of the request; there is no object called Dex.',
   '',
   'TWO DIFFERENT WORDS, TWO DIFFERENT ACTIONS. Do not treat them as synonyms.',
   '',
@@ -248,6 +266,23 @@ export const VOICE_INSTRUCTIONS = [
   '"show me the floor plan" is action "export_blueprint", and "end the',
   'session" or "I am done" is action "end_session". Neither takes a target.',
   '',
+'AN OPEN REQUEST WITH NO NAMED OBJECT — "put some random stuff here", "add a few',
+  'things", "make this a living room", "design this room" — is agent_choice. Send only',
+  'the design name; the device already knows what each design contains, places as much',
+  'as fits, and tells you what it could not. It only ever ADDS.',
+  '',
+  'PLACEMENT IS STATED, NOT GUESSED. On add you may set "support": "floor" puts it',
+  'on the ground, "wall" mounts it, and "object" rests it on "support_id" — a',
+  'television on a cabinet, a vase on a table. Omit it and the object goes where its',
+  'kind normally goes, which is what pointing already means. Prefer stating it when',
+  'the user did: "on the floor", "on the wall", "on top of the desk".',
+  '',
+  'A CATALOG ID NAMES THE OBJECT, NOT WHERE IT GOES. There is no separate entry for',
+  'a mounted version of anything: to mount one, send its ordinary catalog_id with',
+  'support "wall". "Mount the television" is television-on-stand with support "wall",',
+  'not a missing catalog entry. Never tell the user something is unavailable because',
+  'the catalog has no wall-mounted variant of it.',
+  '',
   'Use supplied interaction_context and spatial_context; never guess',
   'coordinates or targets. Report the tool result faithfully, including any',
   'adjustment or caveat. Unknown structural support means it is not',
@@ -256,37 +291,25 @@ export const VOICE_INSTRUCTIONS = [
   'than new ones appearing.',
 ].join('\n');
 /**
- * Nearest authored template for a catalog category. Only five exist.
- *
- * A category absent from this map has no box that would honestly represent it — a
- * plant, a lamp or a statue as a cuboid is a lie — which is what legacy-style reads
- * it for. Here, where a real mesh is drawn on top, the box is only a collision volume.
+ * Nearest authored template for a catalog category. Only five exist, so this is a
+ * deliberate approximation: it shapes the collision volume, not what is seen.
  */
-export const CATALOG_TEMPLATE: Record<string, 'bed' | 'table' | 'frame' | 'shelf' | 'cabinet'> = {
-  shelving_unit: 'shelf',
+const CATALOG_TEMPLATE: Record<string, 'bed' | 'table' | 'frame' | 'shelf' | 'cabinet'> = {
   table: 'table', coffee_table: 'table', desk: 'table',
   chair: 'table', office_chair: 'table', stool: 'table', bench: 'table',
   bed: 'bed', sofa: 'bed', armchair: 'bed',
   cabinet: 'cabinet', sideboard: 'cabinet', wardrobe: 'cabinet',
   dresser: 'cabinet', nightstand: 'cabinet',
-  painting: 'frame', mirror: 'frame', television: 'frame', monitor: 'frame',
+  // FLOOR, not wall. `shelf` and `frame` are the two WALL_FAMILIES, so sending these
+  // here mounted them and made the floor an illegal destination — a freestanding
+  // shelving unit and a television on a stand could then never be put down at all.
+  shelving_unit: 'cabinet', television: 'cabinet', monitor: 'cabinet',
+  // Genuinely wall-mounted, and the only two that are.
+  painting: 'frame', mirror: 'frame',
 };
 
 function templateFor(category: string): 'bed' | 'table' | 'frame' | 'shelf' | 'cabinet' {
   return CATALOG_TEMPLATE[category] ?? 'cabinet';
-}
-
-/** A label and nothing else: "make this a warm scandinavian living room". */
-function bareTheme(input: unknown): string | null {
-  if (!input || typeof input !== 'object') return null;
-  const fields = input as Record<string, unknown>;
-  const label = typeof fields.label === 'string' ? fields.label.trim() : '';
-  if (!label) return null;
-  const asks = ['items', 'wall_color', 'floor_color', 'object_color', 'hide_ids', 'replace_ids'].some((key) => {
-    const value = fields[key];
-    return Array.isArray(value) ? value.length > 0 : value !== undefined;
-  });
-  return asks ? null : label;
 }
 
 export const voiceTool = {
@@ -298,11 +321,39 @@ export const voiceTool = {
 };
 
 /** M7.6: whole arrangements. The planner computes every pose; this carries none. */
+/**
+ * AgentChoice: the model names a design, the device builds as much of it as fits.
+ *
+ * "Put some random stuff in here" has no target, no anchor and no coordinates in it. The
+ * content is HARD-CODED per design (see `designs.ts`) rather than invented per request, so
+ * the same words give the same furniture and the demo does not depend on the model's taste.
+ * What stays the model's job is reading the request and choosing WHICH design.
+ *
+ * Placement is the device's, and it is MAXIMAL: every item is attempted and whatever fits
+ * is kept, so a small room gets a partial living room instead of a refusal. Items that did
+ * not fit are named in the caveats rather than dropped quietly.
+ */
+export const AgentChoiceSchema = z
+  .object({
+    /** Which hard-coded design to build. */
+    design: z.enum(DESIGN_IDS as [string, ...string[]]),
+  })
+  .strict();
+export type AgentChoice = z.infer<typeof AgentChoiceSchema>;
+
+export const agentChoiceTool = {
+  type: 'function',
+  name: 'agent_choice',
+  description:
+    `Furnish the room from a ready-made design, for an open request with no named target — "put some random stuff here", "add a few things", "make this a living room", "design this room". Choose the design that best matches what was asked; use "assorted" when they just want things added without saying what. Send nothing but the design name: the device already knows which objects each design contains, finds each one a valid spot, places as many as will fit, and reports what it could not. This only ADDS objects and never moves, recolours or removes anything already in the room — use edit_room for that. Designs: ${DESIGN_IDS.join(', ')}.`,
+  parameters: toolSchema(AgentChoiceSchema),
+};
+
 export const recipeTool = {
   type: 'function',
   name: 'restyle_room',
   description:
-    'Create or restyle a whole arrangement from a description, e.g. "a blue bedroom with three frames on that wall". Supply only families, counts and named surfaces from the context — never coordinates. To furnish a room in a style without choosing the pieces — "make this a warm scandinavian living room" — send the label alone and omit items: the device asks the server to pick from the catalogue of things that physically fit, which is the only way real furniture models rather than plain shapes get placed. The device plans the layout, checks it against the real room and reports back. If the result asks for confirmation, repeat the call is wrong: call edit_room with action "confirm" once the user agrees.',
+    'Create or restyle a whole arrangement from a description, e.g. "a blue bedroom with three frames on that wall". Supply only families, counts and named surfaces from the context — never coordinates. The device plans the layout, checks it against the real room and reports back. If the result asks for confirmation, repeat the call is wrong: call edit_room with action "confirm" once the user agrees.',
   parameters: toolSchema(RecipeIntentSchema),
 };
 
@@ -413,17 +464,10 @@ export function nextMaskId(state: EditorState): string {
 export interface EditorModules {
   createSettling: () => SettlingAdapter;
   buildObject: typeof buildObject;
-  /**
-   * Furnishes a room from a theme, server-side, against the fitting catalogue.
-   * Injected because the real one reaches the network and this module is loaded
-   * by the Node gate; the default declines, exactly as an offline server does.
-   */
-  requestStylePlan: (state: EditorState, theme: string) => Promise<LegacyPlan | null>;
 }
 export const defaultEditorModules: EditorModules = {
   createSettling: () => new FloorSettlingAdapter(),
   buildObject,
-  requestStylePlan: async () => null,
 };
 
 /** Something the app does, as opposed to something the room does. */
@@ -940,11 +984,68 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
         return propose(plan, context, id);
       }
       const floor = state.design.surfaces.find((s) => s.class === 'floor' && s.state === 'present');
-      const mounted = recipe.family === 'frame' || recipe.family === 'shelf';
       const wall = state.design.surfaces.find(
         (s) => s.id === context.destination?.surfaceId && s.class === 'wall' && s.state === 'present',
       );
-      if (!floor || (mounted && !wall)) return rejected('Point at the mounting wall first.');
+      // WHICH SUPPORT, decided once and explicitly.
+      //
+      // The family used to decide alone, and the destination was only ever read as a
+      // surface — so pointing at a cabinet and asking for a television resolved to the
+      // floor, and a painting could never be stood on the ground. `support` states it
+      // outright; without it the old inference still applies, including reading a
+      // pointed-at OBJECT as the support, which the engine already understood and this
+      // path simply never passed on.
+      const supporterId =
+        command.support_id ??
+        (context.destination?.kind === 'object' ? context.destination.surfaceId : undefined);
+      const supporter = supporterId
+        ? state.design.objects.find((o) => o.id === supporterId && o.state === 'present')
+        : undefined;
+      // Only a supporter that can actually hold something is inferred as one. Pointing
+      // is a ray, and it hits whatever is in front of the floor — a sofa, a bed — so
+      // treating every object hit as a support would turn "put a table here", aimed
+      // past the sofa, into a refusal where it used to place on the floor. Stating
+      // `support: "object"` still reports the reason, because then it was asked for.
+      const canHold = supporter ? bearingFor(state, supporter as never) !== null : false;
+      // POINTED AT A WALL MEANS AGAINST THAT WALL, whatever the family is.
+      //
+      // Reading the family first was a regression: a cabinet aimed at a wall stopped
+      // taking the wall branch and was placed at the wall's own hit point projected
+      // straight down — that is, inside the wall — so the solver had to shove it out and
+      // it never landed where it was aimed. The destination is the more specific fact and
+      // answers first; the family only decides what to do when nothing was pointed at.
+      const mode: 'floor' | 'wall' | 'object' =
+        command.support ??
+        (supporter && canHold
+          ? 'object'
+          : wall
+            ? 'wall'
+            : isWallFamily(recipe.family)
+              ? 'wall'
+              : 'floor');
+      /**
+       * What to TELL `buildObject`, which is not the same question.
+       *
+       * `mode` says where the pose is computed from. This says how the thing is held up,
+       * and it is left undefined unless something actually overrides the family — so a
+       * cabinet against a wall stays floor-standing instead of becoming wall-mounted.
+       */
+      const buildMode = command.support ?? (mode === 'object' ? 'object' : undefined);
+
+      if (!floor) return rejected('I cannot find the floor in this room.');
+      if (mode === 'wall' && !wall) return rejected('Point at the mounting wall first.');
+      if (mode === 'object' && !supporter)
+        return rejected('I cannot find that object to put it on. Point at it, or name it.');
+      // Only geometry can say whether a top exists; the class list behind this is what
+      // makes a scanned desk able to hold something at all.
+      const top =
+        mode === 'object' && supporter
+          ? worldBearing(state, supporter as never, bearingFor(state, supporter as never))
+          : null;
+      if (mode === 'object' && !top)
+        return rejected(
+          `The ${supporter?.refined_class ?? supporter?.class ?? 'object'} has no top that can hold something.`,
+        );
       const origin = context.destination?.position ?? [0, 0, 0];
       const additionsAt = (candidateDimensions: Vec3) => {
         const candidateRecipe = RecipeSchema.parse({ ...recipe, dimensions: candidateDimensions });
@@ -955,14 +1056,31 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
             (i - (candidateRecipe.count - 1) / 2) * (candidateDimensions[0] + gap);
           let position: Vec3 = [origin[0] + offset, 0, origin[2]];
           let yaw = 0;
-          if (wall) {
+          if (mode === 'object' && top) {
+            // Base on the bearing plane. `evaluateSupport` then checks contact and that
+            // at least 60% of the footprint is actually over the supporter's top, so
+            // "on the cabinet" cannot become "hanging off the cabinet".
+            position = [origin[0] + offset, top.y, origin[2]];
+          } else if (mode === 'wall' && wall) {
             const n = wall.plane.normal as Vec3;
             yaw = wallFacingYaw(n);
             const distance =
               n[0] * origin[0] + n[1] * origin[1] + n[2] * origin[2] - wall.plane.offset;
             position = [
               origin[0] + n[0] * (candidateDimensions[2] / 2 - distance) + Math.cos(yaw) * offset,
-              Math.max(0.2, origin[1] - candidateDimensions[1] / 2),
+              // HANGS ONLY IF IT IS ACTUALLY BEING MOUNTED.
+              //
+              // A frame hangs at the height it was aimed at, and so does anything the user
+              // explicitly asked to mount — "mount the television on that wall" is a real
+              // request, and the catalog id describes the object, not where it may go.
+              // A floor object that merely had a wall pointed at stands against it; lifting
+              // that one left it in the air for the solver to drop. Reading the FAMILY here
+              // instead of the mount decision put an explicitly-mounted television on the
+              // floor while telling the assembly it was on the wall, which the mount check
+              // then correctly refused as "not resting on wall".
+              buildMode === 'wall' || isWallFamily(candidateRecipe.family)
+                ? Math.max(0.2, origin[1] - candidateDimensions[1] / 2)
+                : 0,
               origin[2] + n[2] * (candidateDimensions[2] / 2 - distance) - Math.sin(yaw) * offset,
             ];
           }
@@ -970,7 +1088,9 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
             candidateRecipe,
             `${id}-${i}`,
             position,
-            wall?.id ?? floor.id,
+            mode === 'object' ? supporter!.id : mode === 'wall' ? wall!.id : floor.id,
+            undefined,
+            buildMode,
           );
           built.object.pose.yaw = yaw;
           if (catalogued) built.object.asset_ref = `catalog:${catalogued.id}`;
@@ -991,9 +1111,15 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
       // the entry's category, so the requested family may be absent entirely.
       const normal = DEFAULT_DIMENSIONS[family] as Vec3;
       const normalIsSmaller = normal.some((value, axis) => value < dimensions[axis]! - 1e-6);
+      // Clamped to RecipeSchema's own limits. A 4cm-deep painting shrunk by a quarter is
+      // 3cm, which the schema refuses — and `parse` THROWS, so an unclamped value left
+      // `intent` by exception instead of returning a refusal the agent could narrate.
+      const clamp = (value: number) => Math.min(6, Math.max(0.04, Number(value.toFixed(4))));
       const smaller = (normalIsSmaller
-        ? normal.map((value, axis) => Math.min(value, dimensions[axis]!))
-        : dimensions.map((value) => Number((value * 0.75).toFixed(4)))) as Vec3;
+        ? normal.map((value, axis) => clamp(Math.min(value, dimensions[axis]!)))
+        : dimensions.map((value) => clamp(value * 0.75))) as Vec3;
+      // Nothing left to try when the clamp gave back the size that was just refused.
+      if (smaller.every((value, axis) => Math.abs(value - dimensions[axis]!) < 1e-9)) return first;
       const second = engine.batch(additionsAt(smaller), id, context.revision);
       if (second.status === 'rejected') return first;
 
@@ -1133,25 +1259,7 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
       conflicts: [],
       revision: state.revision,
     });
-    // A bare theme cannot satisfy the "must change something" rule, so it is resolved
-    // into a real arrangement BEFORE parsing. Only the server can answer it: it holds
-    // the catalogue and filters it to what fits, so this is the one path that places
-    // real meshes rather than boxes.
-    const plannerCaveats: string[] = [];
-    let request = input;
-    const theme = bareTheme(input);
-    if (theme) {
-      onStage?.('planning');
-      const plan = await modules.requestStylePlan(state, theme);
-      if (!plan) return reject('I could not reach the room planner. Tell me what to add instead.', 'invalid_parameters');
-      const expansion = expandLegacyPlan(state, plan);
-      request = expansion.recipe;
-      // Disclosed, never silent: approximations and refusals both reach the user.
-      for (const a of expansion.approximated) plannerCaveats.push(a.reason);
-      for (const sk of expansion.skipped) plannerCaveats.push(`Skipped: ${sk.reason}`);
-    }
-
-    const parsed = RecipeIntentSchema.safeParse(request);
+    const parsed = RecipeIntentSchema.safeParse(input);
     if (!parsed.success) return reject('I did not understand that arrangement.', 'invalid_parameters');
     if (context.frameId !== state.frameId || context.revision !== state.revision)
       return reject('The room changed since that instruction. Please repeat it.', 'stale_revision');
@@ -1192,11 +1300,223 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
         state.measured.objects.some((o) => o.id === hidden),
       ),
     });
-    const outcome = await propose(recipe, context, id, onStage);
-    // Part of the answer, not a detail of how it was produced.
-    return plannerCaveats.length
-      ? { ...outcome, caveats: [...outcome.caveats, ...plannerCaveats] }
-      : outcome;
+    return propose(recipe, context, id, onStage);
+  }
+
+  /**
+   * Builds a hard-coded design, keeping whatever fits.
+   *
+   * ONE ITEM AT A TIME, deliberately. A single whole-arrangement transaction would be
+   * all-or-nothing, and "add as much as will go" is the requirement — one oversized sofa
+   * would otherwise cost the entire room. It is also the only order in which stacking can
+   * work: the cabinet has to be really present, with a real pose, before the television
+   * can be rested on it.
+   *
+   * ADDITIVE. Each step passes every existing object as `preserveIds`, so the planner
+   * routes around what is already there, including the items this same run just placed.
+   */
+  async function agentChoice(
+    input: unknown,
+    context: InteractionContext,
+    operationId?: string,
+    onStage?: (stage: string) => void,
+  ): Promise<EditResult> {
+    const opening = engine.getSnapshot().scene;
+    const id = operationId ?? nextId();
+    const reject = (message: string, refusal: EditResult['refusal']): EditResult => ({
+      status: 'rejected',
+      message,
+      report: null,
+      refusal,
+      caveats: [],
+      conflicts: [],
+      revision: opening.revision,
+    });
+    const parsed = AgentChoiceSchema.safeParse(input);
+    if (!parsed.success) return reject('I do not have a design by that name.', 'invalid_parameters');
+    const design = designById(parsed.data.design);
+    if (!design) return reject('I do not have a design by that name.', 'invalid_parameters');
+    if (context.frameId !== opening.frameId || context.revision !== opening.revision)
+      return reject('The room changed since that instruction. Please repeat it.', 'stale_revision');
+
+    onStage?.('planning');
+    /**
+     * FLOOR SPACE IS FINITE, and the solver only says so one refusal at a time.
+     *
+     * Left to itself, "maximal" walks the whole design against a full room and reports a
+     * long tail of things that did not fit — technically correct and useless. A budget
+     * scales the design to the room instead: a 9m² room gets a sofa and a lamp, a 30m²
+     * room gets the lot, and neither has to fail its way there.
+     *
+     * Budgeted against the floor that is still FREE, not against the whole room. Charging
+     * a share of the total meant an already-furnished room had spent its allowance before
+     * the design started: the sample room's bed and desk alone took a 40%-of-total budget
+     * from eight placements down to two. What the design may take is a share of what is
+     * actually left, so it scales with the room AND with how full it already is.
+     *
+     * 60% of the remaining floor leaves a walkable margin. The clearance and door-swing
+     * rules are what actually guarantee that; this only stops the design from ASKING for
+     * a room it would have to be refused out of one item at a time.
+     */
+    const footprintOf = (o: { dimensions: readonly number[] }) =>
+      (o.dimensions[0] ?? 0) * (o.dimensions[2] ?? 0);
+    const floorArea = opening.design.bounds.area_m2 || 0;
+    const used = opening.design.objects
+      .filter((o) => o.state === 'present')
+      .reduce((sum, o) => sum + footprintOf(o), 0);
+    let budget = Math.max(0, (floorArea - used) * 0.6);
+
+    /** design key -> the id it actually got, so a later item can rest on it. */
+    const placedAs = new Map<string, string>();
+    const placed: string[] = [];
+    const missed: string[] = [];
+    let painted = false;
+
+    for (const item of orderedItems(design)) {
+      const scene = engine.getSnapshot().scene;
+      // Re-read every turn: each placement advances the revision, and a stale one is
+      // refused by design.
+      const fresh: InteractionContext = {
+        ...context,
+        revision: scene.revision,
+        frameId: scene.frameId,
+        timestamp: Date.now(),
+      };
+      const catalogued = catalogEntry(item.catalogId);
+      const family = catalogued ? templateFor(catalogued.category) : item.family;
+      // A design entry with no catalog match and no family has nothing to draw.
+      if (!family) {
+        missed.push(item.key);
+        continue;
+      }
+      // THE CEILING, counted against the room rather than against this run — so running
+      // a design twice does not furnish it twice, and one television stays one.
+      const ceiling = item.max ?? item.count ?? 1;
+      const already = scene.design.objects.filter(
+        (o) =>
+          o.state === 'present' &&
+          (catalogued ? o.asset_ref === `catalog:${catalogued.id}` : o.refined_class === family),
+      ).length;
+      const room = ceiling - already;
+      if (room <= 0) continue;
+      let wanted = Math.min(item.count ?? 1, room);
+
+      const before = new Set(scene.design.objects.map((o) => o.id));
+      let result: EditResult;
+
+      // First candidate support that actually made it into the room.
+      const supporter = (item.on ?? [])
+        .map((key) => placedAs.get(key))
+        .map((oid) => scene.design.objects.find((o) => o.id === oid && o.state === 'present'))
+        .find((o) => !!o);
+      // No wall in this room is a fact about the room, not a reason to drop the item.
+      const hasWall = scene.design.surfaces.some((sf) => sf.class === 'wall' && sf.state === 'present');
+      const support: 'floor' | 'wall' | 'object' =
+        item.support === 'object' && !supporter
+          ? item.fallbackSupport ?? 'floor'
+          : item.support === 'wall' && !hasWall
+            ? item.fallbackSupport ?? 'floor'
+            : item.support;
+
+      // Only the floor is scarce. A stacked item borrows its supporter's footprint and a
+      // mounted one uses none, so neither is charged for space it does not take.
+      const size = catalogued?.dimensionsM;
+      const footprint = size
+        ? size.width * size.depth
+        : footprintOf({ dimensions: DEFAULT_DIMENSIONS[family] as unknown as number[] });
+      if (support === 'floor' && floorArea > 0) {
+        const affordable = footprint > 0 ? Math.floor(budget / footprint) : wanted;
+        if (affordable <= 0) {
+          missed.push(item.key);
+          continue;
+        }
+        wanted = Math.min(wanted, affordable);
+      }
+
+      if (support === 'object' && supporter) {
+        const centre = supporter.pose.position;
+        result = await intent(
+          {
+            action: 'add',
+            ...(catalogued ? { catalog_id: catalogued.id } : { family }),
+            ...(item.colour ? { color: item.colour } : {}),
+            support: 'object',
+            support_id: supporter.id,
+          },
+          {
+            ...fresh,
+            destination: { position: [centre[0] ?? 0, 0, centre[2] ?? 0], surfaceId: supporter.id, kind: 'object' },
+          },
+          `${id}-${item.key}`,
+        );
+      } else {
+        // Floor and wall items go through the layout planner, which SEARCHES for a pose
+        // rather than validating one — a design has no pointing to take a position from.
+        const recipe = SceneRecipeSchema.parse({
+          label: design.label,
+          items: [
+            RecipeItemSchema.parse({
+              family,
+              count: wanted,
+              dimensions: size ? [size.width, size.height, size.depth] : null,
+              color: item.colour ?? null,
+              materialClass: item.materialClass ?? 'engineered_panel',
+              // The old concept, kept: a wall kind is spaced along a wall, everything
+              // else stands against one. The planner picks the surface.
+              relation: isWallFamily(family) ? 'evenly_spaced' : 'against_wall',
+              catalogId: catalogued?.id ?? null,
+            }),
+          ],
+          // The style's walls and floor, sent once with the first planned item rather
+          // than repeated on every one. Surfaces only — no existing OBJECT is recoloured.
+          palette:
+            painted || !design.palette
+              ? null
+              : { walls: design.palette.walls ?? null, floor: design.palette.floor ?? null, objects: null },
+          preserveIds: scene.design.objects.filter((o) => o.state === 'present').map((o) => o.id),
+          replaceIds: [],
+          hideMeasuredIds: [],
+        });
+        result = await propose(recipe, fresh, `${id}-${item.key}`);
+        if (result.status === 'applied' || result.status === 'adjusted') painted = true;
+      }
+
+      if (result.status === 'applied' || result.status === 'adjusted') {
+        placed.push(item.key);
+        if (support === 'floor') budget -= footprint * wanted;
+        // Whatever appeared is this item: the id scheme differs between the two paths,
+        // so it is read off the scene rather than predicted.
+        const added = engine
+          .getSnapshot()
+          .scene.design.objects.find((o) => !before.has(o.id));
+        if (added) placedAs.set(item.key, added.id);
+      } else {
+        missed.push(item.key);
+      }
+    }
+    onStage?.('planned');
+
+    const state = engine.getSnapshot().scene;
+    if (!placed.length)
+      return {
+        status: 'rejected',
+        message: `There is no room for ${design.label} here.`,
+        report: null,
+        refusal: 'invalid_parameters',
+        caveats: [],
+        conflicts: [],
+        revision: state.revision,
+      };
+    return {
+      status: 'applied',
+      message: `I placed ${placed.length} ${placed.length === 1 ? 'piece' : 'pieces'} for ${design.label}.`,
+      report: null,
+      refusal: null,
+      // Named, not silent: what did not fit is part of the answer.
+      caveats: missed.length ? [`No room for: ${missed.join(', ')}.`] : [],
+      conflicts: [],
+      revision: state.revision,
+    };
   }
 
   return {
@@ -1205,6 +1525,7 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
     attention,
     intent,
     restyle,
+    agentChoice,
     /** What is waiting on a yes, for the panel to show. Null when nothing is. */
     pendingProposal: () => pendingProposal?.proposal ?? null,
     /** Register the screen's handler for app actions. Returns an unsubscribe. */

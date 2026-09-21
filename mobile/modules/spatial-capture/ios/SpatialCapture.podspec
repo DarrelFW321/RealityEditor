@@ -4,8 +4,8 @@ Pod::Spec.new do |s|
   s.summary = 'Session-owned RoomPlan and tracked camera bridge'
   s.description = s.summary
   s.license = { :type => 'MIT' }
-  s.author = 'Reality Editor'
-  s.homepage = 'https://example.invalid/reality-editor'
+  s.author = 'Dex'
+  s.homepage = 'https://example.invalid/dex'
   s.platforms = { :ios => '17.0' }
   s.source = { :git => '' }
   s.static_framework = true

@@ -51,7 +51,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const)
 try {
   await app.listen({ port: config.port, host: config.host });
   app.log.info(
-    `reality-editor server ready. reconstruction: ${store.providerId ?? 'not configured'}, ` +
+    `dex server ready. reconstruction: ${store.providerId ?? 'not configured'}, ` +
       `objects: ${objects.providerId ?? 'not configured'} (${objects.catalogInfo.entries} catalog)`,
   );
 } catch (err) {

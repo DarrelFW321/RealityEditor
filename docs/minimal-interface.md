@@ -34,7 +34,7 @@ drift about what starting a scan means.
    │      ╲              ╱        │      │      ╲              ╱        │
    │        ╲▁▁▁▁▁▁▁▁╱            │      │        ╲▁▁▁▁▁▁▁▁╱            │
    ├──────────────────────────────┤      ├──────────────────────────────┤
-   │       Reality Editor         │      │  Your room is measured       │
+   │             Dex              │      │  Your room is measured       │
    │  Make room for something new │      │  16.0 m² · 4 walls · 86%     │
    │                              │      │                              │
    │     (   Get started   )      │      │     ( Looks right )          │
@@ -150,7 +150,7 @@ generation returns a different room.
    │        ╲▁▁▁▁▁▁▁▁╱            │      │        ╲▁▁▁▁▁▁▁▁╱            │
    │         ( Sample room )      │      │      ( 16.0 m² · 4 walls )   │
    ├──────────────────────────────┤      ├──────────────────────────────┤
-   │  REALITY EDITOR              │      │  Your room is measured       │
+   │  DEX                         │      │  Your room is measured       │
    │  Make room for               │      │  Stay here, or take it with  │
    │  something new.              │      │  you and work on the plan.   │
    │                              │      │                              │

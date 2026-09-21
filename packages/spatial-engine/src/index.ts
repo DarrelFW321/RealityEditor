@@ -19,6 +19,7 @@ import {
   type Vec3,
 } from '@reality/contracts';
 import {
+  area,
   bearingFor,
   bearingIsDerived,
   buildIndex,
@@ -89,12 +90,38 @@ function templateOf(scene: EditorState, object: ObjectLike): string {
 }
 
 /** A lamp may sit on a table. A bed may not. */
-function mayRestOnObject(scene: EditorState, object: ObjectLike): boolean {
+/**
+ * Whether this object is the KIND of thing that rests on another at all.
+ *
+ * It used to also impose an absolute size cap — footprint under 0.4m² and height under
+ * 0.6m — which refused a television on a stand (0.31m², 0.78m tall) and most other real
+ * furniture. That cap was answering the wrong question: whether a thing fits on a given
+ * support is a fact about THAT support, and `evaluateSupport` already decides it against
+ * the real bearing polygon (centre inside it, at least 60% of the footprint covered, and
+ * actually in contact). A second, supporter-blind guess could only disagree with the
+ * measurement, and it did.
+ *
+ * What remains is the one thing geometry cannot infer: a wall-mounted template hangs, so
+ * it never rests on anything.
+ */
+function mayRestOnObject(
+  scene: EditorState,
+  object: ObjectLike,
+  supporter: ObjectLike,
+): boolean {
+  // A wall-mounted template hangs; it never rests on anything.
   if (WALL_TEMPLATES.has(templateOf(scene, object))) return false;
+  const bearing = bearingFor(scene, supporter);
+  if (!bearing) return false;
   const w = object.dimensions[0] ?? 0;
-  const h = object.dimensions[1] ?? 0;
   const d = object.dimensions[2] ?? 0;
-  return w * d <= 0.4 && h <= 0.6;
+  const footprint = w * d;
+  if (footprint <= 0) return false;
+  // EXACTLY the condition `evaluateSupport` will apply, asked early so the refusal can
+  // name the reason. It requires 60% of the footprint to sit over the bearing polygon,
+  // so a top smaller than 60% of the footprint can never satisfy it no matter where the
+  // object is put — which is what stops a bed being stacked on a desk.
+  return area(bearing.polygon) >= 0.6 * footprint;
 }
 
 export class SpatialEngine {
@@ -587,10 +614,10 @@ export class SpatialEngine {
         refusal: 'incompatible_support',
         message: `The ${supporter.refined_class ?? supporter.class} has no surface that can hold something.`,
       };
-    if (!mayRestOnObject(scene, object))
+    if (!mayRestOnObject(scene, object, supporter as ObjectLike))
       return {
         refusal: 'incompatible_support',
-        message: 'That is too large to rest on another object. It belongs on the floor.',
+        message: `That is too large to rest on the ${supporter.refined_class ?? supporter.class}. It belongs on the floor.`,
       };
     return { mode: 'object', surfaceId: supportId };
   }
@@ -1314,6 +1341,9 @@ export class SpatialEngine {
       const object = {
         ...copy(built.object),
         pose: { position: [...placement.position] as Vec3, yaw: placement.yaw },
+        // The authored box stays the collision volume and the fallback shape; this only
+        // points the renderer at the real mesh. Same reference the single add writes.
+        ...(placement.catalogId ? { asset_ref: `catalog:${placement.catalogId}` } : {}),
       };
       const at = candidate.design.objects.findIndex((o) => o.id === placement.id);
       if (at >= 0) candidate.design.objects[at] = object;

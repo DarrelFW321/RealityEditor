@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildObjectPrompt, buildTexturePrompt, resolveSize, SIZE_PRESETS_CM } from './prompts.js';
+import { buildObjectPrompt, buildTexturePrompt, resolveSize, SIZE_PRESETS_CM } from './prompts';
 
 test('object prompt keeps the subject and adds the single-object scaffold', () => {
   const result = buildObjectPrompt({ prompt: 'A large blue freestanding shelving unit.' });
