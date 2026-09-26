@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "npm run start --workspace @reality/mobile",
     "server": "npm run dev --workspace reality-editor-server",
+    "web": "python3 -m http.server 5173 --directory web",
     "typecheck": "tsc --noEmit && npm run typecheck --workspace @reality/mobile && npm run typecheck --workspace reality-editor-server",
     "codegen": "bash contracts/codegen.sh",
     "gate": "tsx mobile/src/runtime/gate.ts && tsx packages/blueprint/selftest.ts && npm run gate:objects && tsx server/src/gate.ts && python3 workers/reconstruction/selftest.py && python3 workers/reconstruction/appearance_selftest.py && python3 workers/reconstruction/erase_selftest.py",
