@@ -13,8 +13,6 @@ const THEMES = {
   gallery: { label: 'Gallery', floor: '#bbb2a3', wall: '#fbfaf8', fabric: '#797670', wood: '#7e6240', accent: '#dfe7ea', green: '#5a8a52' },
 };
 
-const MATERIALS = ['#f2ede4', '#7f6042', '#7e6240', '#a17e57', '#c5af98', '#797670', '#e8d3bb', '#423021', '#dfe7ea', '#bbb2a3', '#54493d', '#512d10', '#b19d7a', '#72695a', '#d2ad80', '#ad2d47', '#eceae5', '#e8e4dc', '#fbfaf8', '#6b8f5e', '#3b5bff'];
-
 // Furniture recipes: footprint (w × d), preferred spot, and parts in local cm.
 // Part: [x, y, w, d, h, z, colourSlot]
 const RECIPES = {
@@ -278,30 +276,6 @@ function reasonText(c) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Hero: a looping version of the README's one-liner                   */
-/* ------------------------------------------------------------------ */
-
-const hero = createRoom(document.getElementById('heroRoom'), { baseScale: 1.5 });
-hero.setTheme('japandi');
-hero.add('rug', RECIPES.rug, 90, 90);
-hero.add('table', RECIPES.table, 155, 150);
-hero.add('shelf', RECIPES.shelf, 110, 0);
-hero.add('plant', RECIPES.plant, 366, 10);
-hero.add('lamp', RECIPES.lamp, 380, 290);
-hero.add('sofa', RECIPES.sofa, 60, 240);
-
-function heroLoop() {
-  hero.move('sofa', 60, 240);
-  setTimeout(() => {
-    hero.flashClearance(DOOR);
-    hero.move('sofa', 100, 240);
-    hero.highlight('sofa');
-  }, 1600);
-}
-heroLoop();
-setInterval(heroLoop, 8000);
-
-/* ------------------------------------------------------------------ */
 /* Editor                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -548,10 +522,6 @@ document.getElementById('rotL').addEventListener('click', () => room.rotate(-90)
 document.getElementById('rotR').addEventListener('click', () => room.rotate(90));
 document.getElementById('reset').addEventListener('click', () => handle('reset'));
 
-const swatches = document.getElementById('swatches');
-for (const c of MATERIALS) {
-  el('span', '', swatches).style.background = c;
-}
 
 room.scan();
 say('dex', 'Room scanned — <b>4.2 × 3.4 m</b>, one door, one window. What should we do with it?');

@@ -1,0 +1,98 @@
+// Landing page behaviour: floating model cards, the before/after slider, and quiet scroll
+// reveals. The model renders come from catalog/generated/*.glb.
+
+(() => {
+  /* ---------------------------------------------------------------- */
+  /* Hero: four renders framing the headline                           */
+  /* ---------------------------------------------------------------- */
+
+  const CARDS = [
+    { id: 'three-seat-sofa', l: 6, t: 16, r: -6 },
+    { id: 'tripod-floor-lamp', l: 15, t: 60, r: 5 },
+    { id: 'linen-armchair', l: 80, t: 13, r: 6 },
+    { id: 'potted-plant', l: 72, t: 59, r: -5 },
+  ];
+
+  const stage = document.getElementById('floatStage');
+  CARDS.forEach((c, i) => {
+    const f = document.createElement('figure');
+    f.className = 'fcard';
+    f.style.setProperty('--l', `${c.l}%`);
+    f.style.setProperty('--t', `${c.t}%`);
+    f.style.setProperty('--r', `${c.r}deg`);
+    f.style.setProperty('--delay', `${i * -1.7}s`);
+    f.style.setProperty('--in', `${0.15 + i * 0.1}s`);
+    f.innerHTML = `<div class="fcard-in"><img src="img/furniture/${c.id}.png" alt="" /></div>`;
+    stage.appendChild(f);
+  });
+
+  // A slight parallax as the pointer moves over the hero.
+  const hero = document.querySelector('.hero');
+  hero.addEventListener('pointermove', (e) => {
+    const r = hero.getBoundingClientRect();
+    stage.style.setProperty('--px', ((e.clientX - r.left) / r.width - 0.5).toFixed(3));
+    stage.style.setProperty('--py', ((e.clientY - r.top) / r.height - 0.5).toFixed(3));
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* Before / after                                                    */
+  /* ---------------------------------------------------------------- */
+
+  const SHOW = {
+    place: { a: 'room-empty', b: 'room-full', tags: ['Before', 'After'], title: 'Speak a room into shape.' },
+    restyle: { a: 'room-full', b: 'room-warm', tags: ['Daylight oak', 'Warm walnut'], title: 'Restyle it without moving a thing.' },
+  };
+
+  const compare = document.getElementById('compare');
+  const range = document.getElementById('compareRange');
+  range.addEventListener('input', () => compare.style.setProperty('--pos', `${range.value}%`));
+
+  document.querySelectorAll('.toggle').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      const s = SHOW[btn.dataset.show];
+      document.querySelectorAll('.toggle').forEach((b) => b.classList.toggle('on', b === btn));
+      document.getElementById('compareA').src = `img/${s.a}.jpg`;
+      document.getElementById('compareB').src = `img/${s.b}.jpg`;
+      document.getElementById('tagA').textContent = s.tags[0];
+      document.getElementById('tagB').textContent = s.tags[1];
+      document.getElementById('compareTitle').textContent = s.title;
+      // Sweep the divider in from the left so the change is visible.
+      let p = 10;
+      const sweep = setInterval(() => {
+        p += 4;
+        range.value = p;
+        compare.style.setProperty('--pos', `${p}%`);
+        if (p >= 50) clearInterval(sweep);
+      }, 16);
+    }),
+  );
+
+  /* ---------------------------------------------------------------- */
+  /* Scroll reveals (the hero waits for the intro to clear)            */
+  /* ---------------------------------------------------------------- */
+
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  document
+    .querySelectorAll('.hero-copy > *, .compare-sec > *, .editor-sec > *, .quote-sec blockquote, .closing > *')
+    .forEach((el) => {
+      el.classList.add('reveal');
+      const sibs = [...el.parentElement.children].filter((c) => c.classList.contains('reveal'));
+      el.style.setProperty('--d', `${sibs.indexOf(el) * 0.08}s`);
+    });
+
+  const io = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        e.target.classList.add('in');
+        io.unobserve(e.target);
+      }
+    },
+    { rootMargin: '0px 0px -8% 0px' },
+  );
+  document.querySelectorAll('.reveal').forEach((el) => (reduce ? el.classList.add('in') : io.observe(el)));
+
+  const introDone = () => stage.classList.add('live');
+  if (document.body.classList.contains('intro-active')) document.addEventListener('dex:intro-done', introDone, { once: true });
+  else introDone();
+})();

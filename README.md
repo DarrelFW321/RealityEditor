@@ -44,8 +44,6 @@ not wired to the app or server.
 npm run web        # http://localhost:5173
 ```
 
-![Web preview](web/screenshot.png)
-
 ## How it fits together
 
 - **The phone owns geometry.** Scene graph, constraint solving, deixis and
