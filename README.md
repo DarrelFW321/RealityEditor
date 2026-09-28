@@ -4,7 +4,9 @@
 
 Scan a room with LiDAR. Point your phone at things and talk. The room changes.
 
-**▶ [Watch the demo](https://www.youtube.com/watch?v=LN3sCLuW9B0)**
+**[Try it in your browser](https://dex-reality-editor.vercel.app/)** ·
+**[Devpost](https://devpost.com/software/reality-editor)** ·
+**[Watch the demo](https://www.youtube.com/watch?v=LN3sCLuW9B0)**
 
 The model never generates images. It emits structured operations against a
 persistent 3D scene graph, and a constraint solver validates every one against
@@ -37,8 +39,9 @@ Check it is alive with `curl localhost:8787/health`.
 
 ## Web preview
 
-A standalone landing page with a toy, in-browser version of the editor. It is
-not wired to the app or server.
+Live at **[dex-reality-editor.vercel.app](https://dex-reality-editor.vercel.app/)** —
+a standalone landing page with a toy, in-browser version of the editor. It is not
+wired to the app or server, and makes no network calls at all.
 
 ```bash
 npm run web        # http://localhost:5173
