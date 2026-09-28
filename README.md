@@ -35,6 +35,15 @@ server through Metro instead of a pinned IP that goes stale.
 
 Check it is alive with `curl localhost:8787/health`.
 
+## Web preview
+
+A standalone landing page with a toy, in-browser version of the editor. It is
+not wired to the app or server.
+
+```bash
+npm run web        # http://localhost:5173
+```
+
 ## How it fits together
 
 - **The phone owns geometry.** Scene graph, constraint solving, deixis and
@@ -86,6 +95,7 @@ catalog/       USDZ + PBR materials + manifest; generated/ holds built meshes
 scripts/       catalog build — resumable, and aborts rather than overspending
 spikes/        experiments wired into nothing; delete freely
 ios/           the original Swift app, superseded by mobile/
+web/           static landing page and toy editor, no build step
 ```
 
 ## Checks

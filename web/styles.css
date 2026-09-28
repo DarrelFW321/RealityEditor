@@ -1,0 +1,1217 @@
+:root {
+  /* Warm, material palette taken from the catalogue: oak, clay, brass, plaster. */
+  --ink: #efe7d9;
+  --ink-2: #a29683;
+  --ink-3: #6d6356;
+  --paper: #14110d;
+  --soft: #1e1a15;
+  --line: rgba(239, 231, 217, 0.1);
+  --clay: #cf7d4f;
+  --brass: #c8a25c;
+  --grad: linear-gradient(115deg, var(--clay), var(--brass));
+  --display: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+  --sans: 'Barlow', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 16px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font: inherit;
+}
+
+h1,
+h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
+
+::selection {
+  background: rgba(207, 125, 79, 0.4);
+}
+
+/* Sits above the page, below the intro (z-index 100), and stays out of the way
+   until the reel has finished. */
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 32px;
+  background: linear-gradient(var(--paper) 35%, rgba(20, 17, 13, 0));
+  transition: opacity 0.7s var(--ease);
+}
+
+.intro-active .topbar {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.topbar-mark {
+  font-family: var(--display);
+  font-size: 46px;
+  line-height: 0.9;
+  letter-spacing: -0.02em;
+}
+
+.topbar-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.topbar-links a:hover {
+  color: var(--ink);
+}
+
+/* Gradient type, as on the logo's "x" */
+.grad {
+  background: var(--grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ================================================================ */
+/* Intro, reveal and editor-room rules                               */
+/* ================================================================ */
+
+/* Full-screen intro */
+body.intro-active {
+  overflow: hidden;
+}
+
+.intro {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #05060a;
+  transition:
+    opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.8s cubic-bezier(0.16, 1, 0.3, 1),
+    filter 0.8s;
+}
+
+.intro[hidden] {
+  display: none;
+}
+
+.intro.is-leaving {
+  opacity: 0;
+  transform: scale(1.04);
+  filter: blur(6px);
+  pointer-events: none;
+}
+
+#reel {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.intro-skip {
+  position: absolute;
+  right: 28px;
+  top: 50%;
+  translate: 0 -50%;
+  writing-mode: vertical-rl;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 8px;
+  border: 1px solid rgba(239, 231, 217, 0.25);
+  background: rgba(20, 17, 13, 0.78);
+  backdrop-filter: blur(8px);
+  color: var(--ink);
+  font: 500 11px var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    border-color 0.2s,
+    background 0.2s;
+}
+
+.intro-skip span {
+  opacity: 0.5;
+}
+
+.intro-skip:hover,
+.intro-skip:focus-visible {
+  border-color: var(--clay);
+  background: rgba(20, 17, 13, 0.92);
+  outline: 0;
+}
+
+/* Scroll-in motion, same expo-out curve as the reel */
+.reveal {
+  opacity: 0;
+  transform: translateY(28px);
+  transition:
+    opacity 0.9s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: var(--d, 0s);
+}
+
+.reveal.in {
+  opacity: 1;
+  transform: none;
+}
+
+.mask-line {
+  display: block;
+  overflow: hidden;
+}
+
+.mask-line > span {
+  display: block;
+  transform: translateY(105%);
+  transition: transform 1s cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: var(--d, 0s);
+}
+
+.in .mask-line > span,
+.mask-line.in > span {
+  transform: none;
+}
+
+/* Isometric room (1px = 1cm) */
+.viewport {
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.viewport-editor {
+  flex: 1;
+  min-height: 460px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.scene {
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 0.9s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.scene * {
+  transform-style: preserve-3d;
+}
+
+.floor {
+  position: absolute;
+  inset: 0;
+  background-color: var(--floor, #7f6042);
+  background-image:
+    repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.12) 0 1px, transparent 1px 34px),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(0, 0, 0, 0.25));
+  transition: background-color 0.8s;
+}
+
+.floor::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(207, 125, 79, 0.4) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(207, 125, 79, 0.4) 1px, transparent 1px);
+  background-size: 20px 20px;
+  opacity: 0;
+  transition: opacity 0.4s;
+}
+
+.scene.scanning .floor::after {
+  opacity: 0.6;
+}
+
+.wall {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  background: var(--wall, #e8e4dc);
+  transition: background-color 0.8s;
+}
+
+.window {
+  position: absolute;
+  background: linear-gradient(160deg, #dbe7ef, #9db4c4);
+  box-shadow: inset 0 0 0 3px rgba(255, 255, 255, 0.7);
+}
+
+.door-swing {
+  position: absolute;
+  border: 1.5px dashed rgba(255, 196, 87, 0.9);
+  border-left: 0;
+  border-bottom: 0;
+  border-radius: 0 100% 0 0;
+  background: rgba(255, 196, 87, 0.1);
+  transform: translateZ(1px);
+}
+
+.clearance {
+  position: absolute;
+  border: 1.5px dashed rgba(207, 125, 79, 0.95);
+  background: rgba(207, 125, 79, 0.16);
+  transform: translateZ(1px);
+  opacity: 0;
+  transition: opacity 0.4s;
+}
+
+.clearance.show {
+  opacity: 1;
+  animation: fade-out 2.4s 1s forwards;
+}
+
+@keyframes fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+.box {
+  position: absolute;
+  transition:
+    left 0.9s cubic-bezier(0.2, 0.8, 0.2, 1),
+    top 0.9s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.box.enter {
+  animation: drop 0.7s cubic-bezier(0.2, 1.3, 0.4, 1);
+}
+
+.box.leave {
+  animation: rise 0.45s ease-in forwards;
+}
+
+@keyframes drop {
+  from {
+    transform: translateZ(160px);
+    opacity: 0;
+  }
+}
+
+@keyframes rise {
+  to {
+    transform: translateZ(120px);
+    opacity: 0;
+  }
+}
+
+.face {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  background: var(--c);
+  backface-visibility: hidden;
+  transition: background-color 0.8s;
+}
+
+.face.top {
+  filter: brightness(1.1);
+}
+
+.face.s {
+  filter: brightness(0.82);
+}
+
+.face.e {
+  filter: brightness(0.66);
+}
+
+.face.n,
+.face.w {
+  filter: brightness(0.6);
+}
+
+.box.ghost .face {
+  background: rgba(200, 162, 92, 0.18);
+  outline: 1px solid rgba(200, 162, 92, 0.9);
+  filter: none;
+  animation: shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  50% {
+    background: rgba(207, 125, 79, 0.32);
+  }
+}
+
+.box.selected .face.top {
+  outline: 1.5px solid var(--clay);
+}
+
+/* ---------------------------------------------------------------- */
+/* Shared                                                            */
+/* ---------------------------------------------------------------- */
+
+.cta {
+  display: inline-flex;
+  align-items: center;
+  padding: 14px 28px;
+  border: 0;
+  cursor: pointer;
+  border-radius: 0;
+  background: var(--grad);
+  background-size: 150% 100%;
+  color: #fff;
+  font-weight: 500;
+  font-size: 16px;
+  box-shadow: 0 12px 40px -14px rgba(207, 125, 79, 0.55);
+  transition:
+    transform 0.25s var(--ease),
+    background-position 0.5s;
+}
+
+.cta:hover {
+  transform: translateY(-1px);
+  background-position: 100% 0;
+}
+
+.cta-quiet {
+  background: none;
+  color: var(--ink);
+  box-shadow: none;
+  outline: 1px solid var(--line);
+}
+
+.cta-quiet:hover {
+  outline-color: var(--clay);
+}
+
+.link {
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: var(--ink-3);
+  text-underline-offset: 5px;
+  transition: text-decoration-color 0.2s;
+}
+
+.link:hover {
+  text-decoration-color: var(--clay);
+}
+
+.sub {
+  margin: 16px auto 0;
+  max-width: 520px;
+  color: var(--ink-2);
+  font-size: 18px;
+}
+
+section h2 {
+  font-size: clamp(28px, 3.2vw, 44px);
+  line-height: 1.08;
+  text-align: center;
+}
+
+/* ---------------------------------------------------------------- */
+/* Hero                                                              */
+/* ---------------------------------------------------------------- */
+
+.hero {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 40px 24px;
+  overflow: hidden;
+  background: radial-gradient(ellipse 55% 45% at 50% 42%, rgba(207, 125, 79, 0.14), transparent 70%), var(--paper);
+}
+
+.hero-copy {
+  position: relative;
+  z-index: 2;
+  text-align: center;
+}
+
+.eyebrow {
+  margin: 0 0 18px;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--clay);
+}
+
+.hero h1 {
+  font-size: clamp(42px, 5.6vw, 78px);
+  line-height: 1.02;
+}
+
+.actions {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 28px;
+  margin-top: 36px;
+}
+
+/* Floating model renders */
+.float-stage {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  --px: 0;
+  --py: 0;
+}
+
+.fcard {
+  position: absolute;
+  left: var(--l);
+  top: var(--t);
+  width: clamp(120px, 12vw, 190px);
+  margin: 0;
+  opacity: 0;
+  transform: translate(calc(var(--px) * -22px), calc(var(--py) * -16px)) rotate(var(--r));
+  transition: transform 0.8s var(--ease);
+}
+
+.float-stage.live .fcard {
+  animation: card-in 1.1s var(--ease) forwards;
+  animation-delay: var(--in);
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    translate: 0 30px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+.fcard-in {
+  border-radius: 0;
+  background: linear-gradient(180deg, #221d17, #16120e);
+  border: 1px solid rgba(239, 231, 217, 0.06);
+  box-shadow: 0 30px 70px -40px rgba(20, 17, 13, 0.75);
+  animation: bob 7s ease-in-out infinite;
+  animation-delay: var(--delay);
+}
+
+@keyframes bob {
+  50% {
+    translate: 0 -8px;
+  }
+}
+
+.fcard img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  padding: 5%;
+}
+
+/* ---------------------------------------------------------------- */
+/* ---------------------------------------------------------------- */
+/* How it works                                                      */
+/* ---------------------------------------------------------------- */
+
+.flow-sec {
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.flow-map {
+  position: relative;
+  /* Matches the SVG viewBox exactly, so the node percentages land on the path. */
+  aspect-ratio: 1000 / 260;
+  max-width: 1000px;
+  margin: 44px auto 0;
+  color: var(--ink-3);
+}
+
+.flow-line {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.flow-node {
+  position: absolute;
+  left: var(--x);
+  top: var(--y);
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: color 0.25s var(--ease);
+}
+
+.flow-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 54px;
+  height: 54px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  font: 500 13px var(--mono);
+  transition:
+    border-color 0.25s var(--ease),
+    color 0.25s var(--ease),
+    transform 0.25s var(--ease);
+}
+
+.flow-label {
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.flow-node:hover {
+  color: var(--ink);
+}
+
+.flow-node:hover .flow-num {
+  border-color: var(--ink-3);
+}
+
+.flow-node.is-on {
+  color: var(--ink);
+}
+
+.flow-node.is-on .flow-num {
+  border-color: var(--clay);
+  color: var(--clay);
+  transform: scale(1.08);
+}
+
+.flow-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 40px;
+  align-items: center;
+  max-width: 1000px;
+  margin: 56px auto 0;
+  text-align: left;
+}
+
+.flow-shot {
+  margin: 0;
+  aspect-ratio: 3 / 2;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+.flow-shot img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.flow-copy h3 {
+  margin: 0 0 12px;
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 32px;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+}
+
+.flow-copy p {
+  margin: 0;
+  max-width: 46ch;
+  color: var(--ink-2);
+}
+
+/* Too short to hold a curve: drop the path and let the nodes wrap. */
+@media (max-width: 760px) {
+  .flow-map {
+    aspect-ratio: auto;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 18px 24px;
+  }
+
+  .flow-line {
+    display: none;
+  }
+
+  .flow-node {
+    position: static;
+    transform: none;
+  }
+
+  .flow-detail {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+}
+
+.compare-sec {
+  padding: 120px 24px 100px;
+  /* Matches .editor-sec. `section h2` centres itself; .sub inherits from here. */
+  text-align: center;
+}
+
+.compare {
+  position: relative;
+  max-width: 1100px;
+  aspect-ratio: 16 / 10;
+  margin: 48px auto 0;
+  border-radius: 0;
+  overflow: hidden;
+  user-select: none;
+  background: var(--soft);
+}
+
+.compare img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.compare-b {
+  clip-path: inset(0 0 0 var(--pos));
+}
+
+.compare-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--pos);
+  width: 2px;
+  margin-left: -1px;
+  background: #fff;
+  pointer-events: none;
+}
+
+.compare-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  translate: -50% -50%;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 14px rgba(207, 125, 79, 0.8);
+}
+
+.compare-tag {
+  position: absolute;
+  top: 16px;
+  padding: 4px 10px;
+  border-radius: 0;
+  background: rgba(20, 17, 13, 0.72);
+  backdrop-filter: blur(6px);
+  font-size: 13px;
+  font-weight: 500;
+  pointer-events: none;
+}
+
+.compare-tag.left {
+  left: 16px;
+}
+
+.compare-tag.right {
+  right: 16px;
+}
+
+.compare-range {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: ew-resize;
+}
+
+.toggles {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 28px;
+  margin-top: 22px;
+}
+
+.toggle {
+  padding: 0 0 4px;
+  border: 0;
+  border-bottom: 1.5px solid transparent;
+  background: none;
+  color: var(--ink-3);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color 0.2s,
+    border-color 0.2s;
+}
+
+.toggle:hover,
+.toggle.on {
+  color: var(--ink);
+}
+
+.toggle.on {
+  background: var(--grad) left bottom / 100% 1.5px no-repeat;
+}
+
+/* ---------------------------------------------------------------- */
+/* Editor                                                            */
+/* ---------------------------------------------------------------- */
+
+.editor-sec {
+  padding: 60px 24px 120px;
+  text-align: center;
+}
+
+.editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  max-width: 1100px;
+  margin: 48px auto 0;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  overflow: hidden;
+  text-align: left;
+  background: var(--paper);
+}
+
+.editor-stage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.stage-bar,
+.legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+}
+
+.tag-line {
+  font: 12px var(--mono);
+  color: var(--ink-3);
+}
+
+.stage-tools {
+  display: flex;
+  gap: 6px;
+}
+
+.icon-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  background: var(--soft);
+}
+
+.viewport-editor {
+  background: radial-gradient(ellipse at 50% 60%, rgba(207, 125, 79, 0.1), transparent 65%), #18140f;
+}
+
+.legend {
+  justify-content: flex-start;
+  gap: 20px;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#countLabel {
+  margin-left: auto;
+}
+
+.editor-chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--line);
+}
+
+.chat-head {
+  display: flex;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.chat-head strong {
+  font-weight: 500;
+}
+
+.chat-head small {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.theme-picker {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.theme-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 0;
+  cursor: pointer;
+  background: linear-gradient(135deg, var(--a) 50%, var(--b) 50%);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.theme-dot.active {
+  box-shadow:
+    0 0 0 2px var(--paper),
+    0 0 0 3px var(--ink);
+}
+
+.chat-log {
+  flex: 1;
+  list-style: none;
+  margin: 0;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  max-height: 420px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.msg {
+  max-width: 90%;
+  padding: 9px 13px;
+  border-radius: 0;
+  font-size: 15px;
+  line-height: 1.45;
+  animation: msg-in 0.3s ease-out;
+}
+
+@keyframes msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.msg.user {
+  align-self: flex-end;
+  background: var(--grad);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.msg.dex {
+  align-self: flex-start;
+  background: var(--soft);
+  border-bottom-left-radius: 4px;
+}
+
+.msg.dex b {
+  font-weight: 500;
+  color: var(--clay);
+}
+
+.msg.refused b {
+  color: #fb7185;
+}
+
+.msg .report {
+  display: block;
+  margin-top: 8px;
+  font: 11px/1.55 var(--mono);
+  color: var(--ink-2);
+  white-space: pre-wrap;
+}
+
+.typing {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.typing i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  animation: blink 1s infinite;
+}
+
+.typing i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+  padding: 0 16px 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  mask-image: linear-gradient(90deg, #000 85%, transparent);
+}
+
+.chip {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  border-color: var(--ink-3);
+}
+
+.composer {
+  display: flex;
+  gap: 8px;
+  margin: 0 16px 16px;
+  padding: 5px 5px 5px 14px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+}
+
+.composer:focus-within {
+  border-color: var(--ink-3);
+}
+
+.composer input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--ink);
+  font: 15px var(--sans);
+}
+
+.composer input::placeholder {
+  color: var(--ink-3);
+}
+
+.send {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 0;
+  background: var(--grad);
+  color: #fff;
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------- */
+/* Quote, closing, footer                                            */
+/* ---------------------------------------------------------------- */
+
+.quote-sec {
+  padding: 100px 24px;
+}
+
+.quote-sec blockquote {
+  max-width: 880px;
+  margin: 0 auto;
+  font-size: clamp(26px, 3vw, 40px);
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+  text-align: center;
+}
+
+.closing {
+  padding: 60px 24px 160px;
+  text-align: center;
+}
+
+.closing h2 {
+  font-size: clamp(44px, 6.5vw, 92px);
+  line-height: 1;
+  letter-spacing: -0.045em;
+  margin-bottom: 36px;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  justify-content: space-between;
+  align-items: center;
+  padding: 26px 32px;
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 24px;
+}
+
+.footer-links a {
+  color: var(--ink-2);
+  text-decoration: none;
+}
+
+.footer-links a:hover {
+  color: var(--ink);
+}
+
+.wordmark {
+  color: var(--ink);
+  font-weight: 500;
+  font-size: 16px;
+}
+
+/* The hero waits for the intro to clear before it animates in */
+.intro-active .hero .reveal.in {
+  opacity: 0;
+  transform: translateY(28px);
+}
+
+/* ---------------------------------------------------------------- */
+/* Responsive                                                        */
+/* ---------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .editor-chat {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+}
+
+@media (max-width: 760px) {
+  .hero {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 44px;
+  }
+  .float-stage {
+    position: relative;
+    inset: auto;
+    order: 2;
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+  }
+  .fcard {
+    position: relative;
+    left: auto;
+    top: auto;
+    width: 27vw;
+    transform: rotate(calc(var(--r) * 0.6));
+  }
+  .fcard:nth-child(4) {
+    display: none;
+  }
+  .actions {
+    flex-direction: column;
+    gap: 18px;
+  }
+  .compare-sec {
+    padding-top: 80px;
+  }
+  .intro-skip {
+    top: auto;
+    bottom: 64px;
+    right: 50%;
+    translate: 50% 0;
+    writing-mode: horizontal-tb;
+    padding: 10px 14px;
+  }
+  .viewport-editor {
+    min-height: 340px;
+  }
+  .footer {
+    padding: 22px 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  .fcard {
+    opacity: 1;
+  }
+}

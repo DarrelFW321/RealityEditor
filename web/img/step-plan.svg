@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" role="img"
+     aria-label="A to-scale floor plan of the living room, 4.20 by 3.40 metres, with the sofa, coffee table, armchair, lamp and plant drawn in.">
+  <rect width="600" height="400" fill="#14110d" />
+
+  <text x="110" y="28" fill="#cf7d4f" font-family="ui-monospace, monospace" font-size="12"
+        letter-spacing="1.5">DEX · LIVING ROOM · 1:50</text>
+
+  <!-- walls: 4.20 x 3.40 m at 90 px per metre -->
+  <rect x="110" y="44" width="378" height="306" fill="none"
+        stroke="#efe7d9" stroke-opacity=".55" stroke-width="5" />
+
+  <!-- window on the top wall -->
+  <path d="M340 44 H440" stroke="#14110d" stroke-width="7" />
+  <path d="M340 44 H440" stroke="#a29683" stroke-width="2" />
+  <path d="M340 37 H440" stroke="#a29683" stroke-opacity=".45" stroke-width="1" />
+
+  <!-- door on the left wall, opening in -->
+  <path d="M110 190 v90" stroke="#14110d" stroke-width="7" />
+  <path d="M110 280 A90 90 0 0 0 200 190" fill="none"
+        stroke="#a29683" stroke-opacity=".55" stroke-width="1" stroke-dasharray="4 4" />
+  <path d="M110 190 v90" stroke="#cf7d4f" stroke-width="2.5" />
+
+  <!-- furniture, as plan symbols -->
+  <g stroke="#efe7d9" stroke-opacity=".7" stroke-width="1.5" fill="#efe7d9" fill-opacity=".07">
+    <rect x="150" y="56" width="180" height="80" />
+    <rect x="200" y="180" width="100" height="54" />
+    <rect x="390" y="200" width="72" height="72" />
+    <circle cx="136" cy="96" r="15" />
+    <circle cx="460" cy="100" r="15" />
+  </g>
+  <g fill="#a29683" font-family="ui-monospace, monospace" font-size="11" text-anchor="middle">
+    <text x="240" y="101">sofa</text>
+    <text x="250" y="212">table</text>
+    <text x="426" y="241">chair</text>
+    <text x="136" y="128">lamp</text>
+    <text x="460" y="132">plant</text>
+  </g>
+
+  <!-- dimensions -->
+  <g stroke="#efe7d9" stroke-opacity=".38" stroke-width="1">
+    <path d="M110 372 H488 M110 366 v12 M488 366 v12" />
+    <path d="M80 44 V350 M74 44 h12 M74 350 h12" />
+  </g>
+  <text x="299" y="392" fill="#efe7d9" fill-opacity=".6" font-family="ui-monospace, monospace"
+        font-size="12" text-anchor="middle">4.20 m</text>
+  <text x="62" y="197" fill="#efe7d9" fill-opacity=".6" font-family="ui-monospace, monospace"
+        font-size="12" text-anchor="middle" transform="rotate(-90 62 197)">3.40 m</text>
+</svg>

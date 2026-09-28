@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- The wordmark's accented letter, in the page's own clay on warm paper.
+       No webfont: a favicon renders before stylesheets, so this uses a system serif. -->
+  <rect width="64" height="64" fill="#14110d" />
+  <text
+    x="32"
+    y="47"
+    fill="#cf7d4f"
+    font-family="Iowan Old Style, Palatino, Georgia, 'Times New Roman', serif"
+    font-size="46"
+    text-anchor="middle"
+  >x</text>
+</svg>
