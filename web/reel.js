@@ -593,7 +593,7 @@
         const tag = E.outCubic(seg(lt, 0.7, 0.95)) * (1 - seg(lt, 1.1, 1.25));
         if (tag > 0) {
           const [lx, ly] = photoPoint('sofa', zoom, 0.59, 0.45);
-          text('sofa · 2.0 m · clearance ✓', lx, ly, { font: MONO, size: 1.9 * u, color: C.cyan, alpha: tag });
+          text('sofa · 2.0 m · it fits', lx, ly, { font: MONO, size: 1.9 * u, color: C.cyan, alpha: tag });
         }
         speak('“and furnish the rest.”', W / 2, 14 * u, 6.5 * u, C.white, lt, { start: 0.95, per: 0.1 });
       },

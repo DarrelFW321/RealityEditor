@@ -275,6 +275,10 @@ function reasonText(c) {
   return typeof r === 'function' ? r(c.with) : r;
 }
 
+/** The same checks in words, for the receipt under each reply. */
+const CHECKS = { door_swing: 'door swing', window: 'window', collision: 'overlap', walls: 'room edge' };
+const checkName = (kind) => CHECKS[kind] ?? kind;
+
 /* ------------------------------------------------------------------ */
 /* Editor                                                              */
 /* ------------------------------------------------------------------ */
@@ -324,9 +328,19 @@ function thinking(ms = 700) {
   );
 }
 
-function findItem(name) {
+const RECIPE_NAMES = new Set(Object.values(RECIPES).map((r) => r.name));
+
+// Resolves the object the text names, or null. Resolving the type against RECIPES
+// first keeps the answer independent of what was placed when: 'seat' also matches the
+// armchair, so room order decided "remove the three-seat sofa".
+function findItem(text) {
+  const named = matchRecipe(text);
+  if (named) {
+    for (const [id, it] of room.items) if (it.recipe.name === named.name) return id;
+  }
+  // Generated objects carry a noun of their own and are not in RECIPES.
   for (const [id, it] of room.items) {
-    if (it.recipe.words?.some((w) => name.includes(w)) || name.includes(it.recipe.name)) return id;
+    if (!RECIPE_NAMES.has(it.recipe.name) && text.includes(it.recipe.name)) return id;
   }
   return null;
 }
@@ -347,7 +361,7 @@ function place(recipe) {
     return say(
       'dex',
       `<b>No — it won’t fit honestly.</b> A queen bed is 160×200cm. With what’s already here, the only open space is across the door swing.`,
-      { refused: true, report: `op    place(${recipe.name})\ncheck clearance ✗  largest free rect < 160×200\nresult REFUSED` },
+      { refused: true, report: `op    place(${recipe.name})\ncheck space ✗  biggest free area is smaller than 160×200\nresult REFUSED` },
     );
   }
   const existing = findItem(recipe.name);
@@ -357,7 +371,7 @@ function place(recipe) {
   if (res.refused) {
     return say('dex', `<b>There’s nowhere for a ${recipe.name}</b> that keeps the room usable.`, {
       refused: true,
-      report: `op    place(${recipe.name})\ncheck ${res.first.kind} ✗\nresult REFUSED`,
+      report: `op    place(${recipe.name})\ncheck ${checkName(res.first.kind)} ✗\nresult REFUSED`,
     });
   }
 
@@ -374,12 +388,12 @@ function place(recipe) {
       room.highlight(id);
     }, 650);
     say('dex', `Placed the ${recipe.name}. I shifted it <b>${describeShift(res.x - ax, res.y - ay)}</b> ${reasonText(res.first)}.`, {
-      report: `op    place(${recipe.name}, near, ${recipe.wall ? `wall.${recipe.wall}` : 'intent'})\ncheck ${res.first.kind} ✗ → shift\ncheck collisions ✓\npose  (${m(res.x)}, ${m(res.y)}) m`,
+      report: `op    place(${recipe.name}${recipe.wall ? `, against the ${recipe.wall} wall` : ''})\ncheck ${checkName(res.first.kind)} ✗ → moved\ncheck overlaps ✓\nplaced at (${m(res.x)}, ${m(res.y)}) m`,
     });
   } else {
     room.highlight(id);
-    say('dex', `Done — the ${recipe.name} is in. ${recipe.flat ? 'Rugs don’t block anything, so it sits under the rest.' : 'Every clearance checks out.'}`, {
-      report: `op    place(${recipe.name})\ncheck clearance ✓  door_swing ✓\npose  (${m(res.x)}, ${m(res.y)}) m`,
+    say('dex', `Done — the ${recipe.name} is in. ${recipe.flat ? 'Rugs don’t block anything, so it sits under the rest.' : 'Nothing is in its way, and the door still opens.'}`, {
+      report: `op    place(${recipe.name})\ncheck space ✓  door swing ✓\nplaced at (${m(res.x)}, ${m(res.y)}) m`,
     });
   }
 }
@@ -426,13 +440,13 @@ function nudge(text) {
     if (c.rect) room.flashClearance(c.rect);
     return say('dex', `<b>I can’t move it there</b> — that would block ${c.kind === 'door_swing' ? 'the door' : c.kind === 'collision' ? `the ${c.with}` : 'a wall'}.`, {
       refused: true,
-      report: `op    move(${it.recipe.name}, ${describeShift(...delta)})\ncheck ${c.kind} ✗\nresult REFUSED`,
+      report: `op    move(${it.recipe.name}, ${describeShift(...delta)})\ncheck ${checkName(c.kind)} ✗\nresult REFUSED`,
     });
   }
   room.move(id, ...target);
   room.highlight(id);
   say('dex', `Moved the ${it.recipe.name} <b>${describeShift(...delta)}</b>.`, {
-    report: `op    move(${it.recipe.name})\npose  (${m(target[0])}, ${m(target[1])}) m`,
+    report: `op    move(${it.recipe.name})\nplaced at (${m(target[0])}, ${m(target[1])}) m`,
   });
 }
 
@@ -458,14 +472,32 @@ async function handle(raw) {
     updateCount();
     say('dex', 'Cleared. Back to the bare scan.');
   } else if (/\b(remove|delete|get rid of|take out|lose)\b/.test(text)) {
-    const id = findItem(text) || [...room.items.keys()].pop();
-    if (!id) {
-      say('dex', 'The room’s already empty.');
+    const id = findItem(text);
+    // Only a pronoun may mean "whatever I last placed". Naming something that is not
+    // here is a refusal — falling back deleted an armchair when asked for a rug.
+    const deictic = /\b(that|it|this|those|them|last one)\b/.test(text);
+    const named = matchRecipe(text);
+    if (!id && !deictic) {
+      say(
+        'dex',
+        named
+          ? `<b>There’s no ${named.name} in the room.</b> Nothing removed.`
+          : 'Which one? Name it, or say <b>remove that</b> for the last thing I placed.',
+        {
+          refused: true,
+          report: named ? `op    remove(${named.name})\ncheck present ✗\nresult REFUSED` : undefined,
+        },
+      );
     } else {
-      const name = room.items.get(id).recipe.name;
-      room.remove(id);
-      updateCount();
-      say('dex', `Removed the ${escapeHtml(name)}.`, { report: `op    remove(${name})` });
+      const target = id || [...room.items.keys()].pop();
+      if (!target) {
+        say('dex', 'The room’s already empty.');
+      } else {
+        const name = room.items.get(target).recipe.name;
+        room.remove(target);
+        updateCount();
+        say('dex', `Removed the ${escapeHtml(name)}.`, { report: `op    remove(${name})` });
+      }
     }
   } else if (/\b(move|shift|push|slide|nudge)\b/.test(text)) {
     nudge(text);

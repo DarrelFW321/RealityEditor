@@ -1,14 +1,15 @@
 :root {
-  --ink: #f4f6ff;
-  --ink-2: #9aa0b8;
-  --ink-3: #636a82;
-  --paper: #05060a;
-  --soft: #10131c;
-  --line: rgba(244, 246, 255, 0.08);
-  --cyan: #22d3ee;
-  --blue: #3b5bff;
-  --violet: #a855f7;
-  --grad: linear-gradient(115deg, var(--cyan), var(--blue) 55%, var(--violet));
+  /* Warm, material palette taken from the catalogue: oak, clay, brass, plaster. */
+  --ink: #efe7d9;
+  --ink-2: #a29683;
+  --ink-3: #6d6356;
+  --paper: #14110d;
+  --soft: #1e1a15;
+  --line: rgba(239, 231, 217, 0.1);
+  --clay: #cf7d4f;
+  --brass: #c8a25c;
+  --grad: linear-gradient(115deg, var(--clay), var(--brass));
+  --display: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
   --sans: 'Barlow', system-ui, sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, monospace;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
@@ -43,12 +44,54 @@ button {
 h1,
 h2 {
   margin: 0;
-  font-weight: 500;
-  letter-spacing: -0.035em;
+  font-family: var(--display);
+  font-weight: 400;
+  letter-spacing: -0.02em;
 }
 
 ::selection {
-  background: rgba(59, 91, 255, 0.45);
+  background: rgba(207, 125, 79, 0.4);
+}
+
+/* Sits above the page, below the intro (z-index 100), and stays out of the way
+   until the reel has finished. */
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 32px;
+  background: linear-gradient(var(--paper) 35%, rgba(20, 17, 13, 0));
+  transition: opacity 0.7s var(--ease);
+}
+
+.intro-active .topbar {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.topbar-mark {
+  font-family: var(--display);
+  font-size: 46px;
+  line-height: 0.9;
+  letter-spacing: -0.02em;
+}
+
+.topbar-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.topbar-links a:hover {
+  color: var(--ink);
 }
 
 /* Gradient type, as on the logo's "x" */
@@ -106,10 +149,10 @@ body.intro-active {
   align-items: center;
   gap: 10px;
   padding: 14px 8px;
-  border: 1px solid rgba(244, 246, 255, 0.25);
-  background: rgba(5, 6, 10, 0.78);
+  border: 1px solid rgba(239, 231, 217, 0.25);
+  background: rgba(20, 17, 13, 0.78);
   backdrop-filter: blur(8px);
-  color: #f4f6ff;
+  color: var(--ink);
   font: 500 11px var(--mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -125,8 +168,8 @@ body.intro-active {
 
 .intro-skip:hover,
 .intro-skip:focus-visible {
-  border-color: #22d3ee;
-  background: rgba(5, 6, 10, 0.92);
+  border-color: var(--clay);
+  background: rgba(20, 17, 13, 0.92);
   outline: 0;
 }
 
@@ -202,8 +245,8 @@ body.intro-active {
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(rgba(34, 211, 238, 0.45) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(34, 211, 238, 0.45) 1px, transparent 1px);
+    linear-gradient(rgba(207, 125, 79, 0.4) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(207, 125, 79, 0.4) 1px, transparent 1px);
   background-size: 20px 20px;
   opacity: 0;
   transition: opacity 0.4s;
@@ -224,7 +267,7 @@ body.intro-active {
 
 .window {
   position: absolute;
-  background: linear-gradient(160deg, #bfe9ff, #6fa8dc);
+  background: linear-gradient(160deg, #dbe7ef, #9db4c4);
   box-shadow: inset 0 0 0 3px rgba(255, 255, 255, 0.7);
 }
 
@@ -240,8 +283,8 @@ body.intro-active {
 
 .clearance {
   position: absolute;
-  border: 1.5px dashed rgba(34, 211, 238, 0.95);
-  background: rgba(34, 211, 238, 0.14);
+  border: 1.5px dashed rgba(207, 125, 79, 0.95);
+  background: rgba(207, 125, 79, 0.16);
   transform: translateZ(1px);
   opacity: 0;
   transition: opacity 0.4s;
@@ -315,20 +358,20 @@ body.intro-active {
 }
 
 .box.ghost .face {
-  background: rgba(168, 85, 247, 0.16);
-  outline: 1px solid rgba(168, 85, 247, 0.9);
+  background: rgba(200, 162, 92, 0.18);
+  outline: 1px solid rgba(200, 162, 92, 0.9);
   filter: none;
   animation: shimmer 1.2s ease-in-out infinite;
 }
 
 @keyframes shimmer {
   50% {
-    background: rgba(34, 211, 238, 0.3);
+    background: rgba(207, 125, 79, 0.32);
   }
 }
 
 .box.selected .face.top {
-  outline: 1.5px solid var(--cyan);
+  outline: 1.5px solid var(--clay);
 }
 
 /* ---------------------------------------------------------------- */
@@ -339,13 +382,15 @@ body.intro-active {
   display: inline-flex;
   align-items: center;
   padding: 14px 28px;
-  border-radius: 999px;
+  border: 0;
+  cursor: pointer;
+  border-radius: 0;
   background: var(--grad);
   background-size: 150% 100%;
   color: #fff;
   font-weight: 500;
   font-size: 16px;
-  box-shadow: 0 12px 40px -14px rgba(59, 91, 255, 0.7);
+  box-shadow: 0 12px 40px -14px rgba(207, 125, 79, 0.55);
   transition:
     transform 0.25s var(--ease),
     background-position 0.5s;
@@ -354,6 +399,17 @@ body.intro-active {
 .cta:hover {
   transform: translateY(-1px);
   background-position: 100% 0;
+}
+
+.cta-quiet {
+  background: none;
+  color: var(--ink);
+  box-shadow: none;
+  outline: 1px solid var(--line);
+}
+
+.cta-quiet:hover {
+  outline-color: var(--clay);
 }
 
 .link {
@@ -365,7 +421,7 @@ body.intro-active {
 }
 
 .link:hover {
-  text-decoration-color: var(--cyan);
+  text-decoration-color: var(--clay);
 }
 
 .sub {
@@ -393,13 +449,22 @@ section h2 {
   place-items: center;
   padding: 40px 24px;
   overflow: hidden;
-  background: radial-gradient(ellipse 55% 45% at 50% 42%, rgba(59, 91, 255, 0.16), transparent 70%), var(--paper);
+  background: radial-gradient(ellipse 55% 45% at 50% 42%, rgba(207, 125, 79, 0.14), transparent 70%), var(--paper);
 }
 
 .hero-copy {
   position: relative;
   z-index: 2;
   text-align: center;
+}
+
+.eyebrow {
+  margin: 0 0 18px;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--clay);
 }
 
 .hero h1 {
@@ -452,10 +517,10 @@ section h2 {
 }
 
 .fcard-in {
-  border-radius: 22px;
-  background: linear-gradient(180deg, #131722, #0b0d14);
-  border: 1px solid rgba(244, 246, 255, 0.06);
-  box-shadow: 0 30px 70px -40px rgba(59, 91, 255, 0.55);
+  border-radius: 0;
+  background: linear-gradient(180deg, #221d17, #16120e);
+  border: 1px solid rgba(239, 231, 217, 0.06);
+  box-shadow: 0 30px 70px -40px rgba(20, 17, 13, 0.75);
   animation: bob 7s ease-in-out infinite;
   animation-delay: var(--delay);
 }
@@ -475,11 +540,154 @@ section h2 {
 }
 
 /* ---------------------------------------------------------------- */
-/* Before / after                                                    */
 /* ---------------------------------------------------------------- */
+/* How it works                                                      */
+/* ---------------------------------------------------------------- */
+
+.flow-sec {
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.flow-map {
+  position: relative;
+  /* Matches the SVG viewBox exactly, so the node percentages land on the path. */
+  aspect-ratio: 1000 / 260;
+  max-width: 1000px;
+  margin: 44px auto 0;
+  color: var(--ink-3);
+}
+
+.flow-line {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.flow-node {
+  position: absolute;
+  left: var(--x);
+  top: var(--y);
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: color 0.25s var(--ease);
+}
+
+.flow-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 54px;
+  height: 54px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  font: 500 13px var(--mono);
+  transition:
+    border-color 0.25s var(--ease),
+    color 0.25s var(--ease),
+    transform 0.25s var(--ease);
+}
+
+.flow-label {
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.flow-node:hover {
+  color: var(--ink);
+}
+
+.flow-node:hover .flow-num {
+  border-color: var(--ink-3);
+}
+
+.flow-node.is-on {
+  color: var(--ink);
+}
+
+.flow-node.is-on .flow-num {
+  border-color: var(--clay);
+  color: var(--clay);
+  transform: scale(1.08);
+}
+
+.flow-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 40px;
+  align-items: center;
+  max-width: 1000px;
+  margin: 56px auto 0;
+  text-align: left;
+}
+
+.flow-shot {
+  margin: 0;
+  aspect-ratio: 3 / 2;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+.flow-shot img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.flow-copy h3 {
+  margin: 0 0 12px;
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 32px;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+}
+
+.flow-copy p {
+  margin: 0;
+  max-width: 46ch;
+  color: var(--ink-2);
+}
+
+/* Too short to hold a curve: drop the path and let the nodes wrap. */
+@media (max-width: 760px) {
+  .flow-map {
+    aspect-ratio: auto;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 18px 24px;
+  }
+
+  .flow-line {
+    display: none;
+  }
+
+  .flow-node {
+    position: static;
+    transform: none;
+  }
+
+  .flow-detail {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+}
 
 .compare-sec {
   padding: 120px 24px 100px;
+  /* Matches .editor-sec. `section h2` centres itself; .sub inherits from here. */
+  text-align: center;
 }
 
 .compare {
@@ -487,7 +695,7 @@ section h2 {
   max-width: 1100px;
   aspect-ratio: 16 / 10;
   margin: 48px auto 0;
-  border-radius: 20px;
+  border-radius: 0;
   overflow: hidden;
   user-select: none;
   background: var(--soft);
@@ -526,15 +734,15 @@ section h2 {
   translate: -50% -50%;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 0 14px rgba(34, 211, 238, 0.8);
+  box-shadow: 0 0 14px rgba(207, 125, 79, 0.8);
 }
 
 .compare-tag {
   position: absolute;
   top: 16px;
   padding: 4px 10px;
-  border-radius: 999px;
-  background: rgba(5, 6, 10, 0.7);
+  border-radius: 0;
+  background: rgba(20, 17, 13, 0.72);
   backdrop-filter: blur(6px);
   font-size: 13px;
   font-weight: 500;
@@ -561,6 +769,7 @@ section h2 {
 
 .toggles {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
   gap: 28px;
   margin-top: 22px;
@@ -603,7 +812,7 @@ section h2 {
   max-width: 1100px;
   margin: 48px auto 0;
   border: 1px solid var(--line);
-  border-radius: 20px;
+  border-radius: 0;
   overflow: hidden;
   text-align: left;
   background: var(--paper);
@@ -637,7 +846,7 @@ section h2 {
   width: 32px;
   height: 32px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 0;
   background: var(--paper);
   color: var(--ink);
   cursor: pointer;
@@ -648,7 +857,7 @@ section h2 {
 }
 
 .viewport-editor {
-  background: radial-gradient(ellipse at 50% 60%, rgba(59, 91, 255, 0.12), transparent 65%), #07080d;
+  background: radial-gradient(ellipse at 50% 60%, rgba(207, 125, 79, 0.1), transparent 65%), #18140f;
 }
 
 .legend {
@@ -666,21 +875,6 @@ section h2 {
 
 #countLabel {
   margin-left: auto;
-}
-
-.sw {
-  width: 14px;
-  height: 10px;
-  border-radius: 3px;
-  border: 1.5px dashed;
-}
-
-.sw-door {
-  border-color: #f0b44c;
-}
-
-.sw-clear {
-  border-color: var(--cyan);
 }
 
 .editor-chat {
@@ -747,7 +941,7 @@ section h2 {
 .msg {
   max-width: 90%;
   padding: 9px 13px;
-  border-radius: 14px;
+  border-radius: 0;
   font-size: 15px;
   line-height: 1.45;
   animation: msg-in 0.3s ease-out;
@@ -775,7 +969,7 @@ section h2 {
 
 .msg.dex b {
   font-weight: 500;
-  color: var(--cyan);
+  color: var(--clay);
 }
 
 .msg.refused b {
@@ -830,7 +1024,7 @@ section h2 {
   flex-shrink: 0;
   padding: 6px 12px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: 0;
   background: var(--paper);
   color: var(--ink);
   font-size: 13px;
@@ -847,7 +1041,7 @@ section h2 {
   margin: 0 16px 16px;
   padding: 5px 5px 5px 14px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 0;
 }
 
 .composer:focus-within {
@@ -872,7 +1066,7 @@ section h2 {
   width: 36px;
   height: 36px;
   border: 0;
-  border-radius: 9px;
+  border-radius: 0;
   background: var(--grad);
   color: #fff;
   cursor: pointer;
@@ -910,6 +1104,8 @@ section h2 {
 
 .footer {
   display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
   justify-content: space-between;
   align-items: center;
   padding: 26px 32px;
@@ -918,22 +1114,26 @@ section h2 {
   color: var(--ink-2);
 }
 
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 24px;
+}
+
+.footer-links a {
+  color: var(--ink-2);
+  text-decoration: none;
+}
+
+.footer-links a:hover {
+  color: var(--ink);
+}
+
 .wordmark {
   color: var(--ink);
   font-weight: 500;
   font-size: 16px;
-}
-
-.footer button {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--ink-2);
-  cursor: pointer;
-}
-
-.footer button:hover {
-  color: var(--ink);
 }
 
 /* The hero waits for the intro to clear before it animates in */

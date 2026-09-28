@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" role="img"
+     aria-label="Plan view: a sofa asked for across the door's swing, and where it was actually placed, 40 centimetres clear.">
+  <rect width="600" height="400" fill="#14110d" />
+
+  <!-- room -->
+  <rect x="70" y="56" width="460" height="264" fill="none"
+        stroke="#efe7d9" stroke-opacity=".28" stroke-width="2" />
+
+  <!-- door on the left wall, and the floor it needs to open -->
+  <path d="M70 150 A90 90 0 0 1 160 240" fill="#ffc457" fill-opacity=".08"
+        stroke="#ffc457" stroke-opacity=".75" stroke-width="1.5" stroke-dasharray="5 4" />
+  <path d="M70 150 v90" stroke="#14110d" stroke-width="7" />
+  <path d="M70 150 v90" stroke="#ffc457" stroke-width="3" />
+  <text x="84" y="264" fill="#ffc457" font-family="ui-monospace, monospace" font-size="12">door</text>
+
+  <!-- asked for: sitting across the swing -->
+  <rect x="96" y="166" width="150" height="62" fill="#cf7d4f" fill-opacity=".09"
+        stroke="#cf7d4f" stroke-opacity=".65" stroke-width="1.5" stroke-dasharray="6 5" />
+  <text x="171" y="156" fill="#a29683" font-family="ui-monospace, monospace" font-size="12"
+        text-anchor="middle">asked for</text>
+
+  <!-- placed: clear of it -->
+  <rect x="256" y="166" width="150" height="62" fill="#cf7d4f" fill-opacity=".3"
+        stroke="#cf7d4f" stroke-width="2" />
+  <text x="331" y="204" fill="#efe7d9" font-family="ui-monospace, monospace" font-size="13"
+        text-anchor="middle">sofa</text>
+
+  <!-- the displacement, measured between the two left edges -->
+  <g stroke="#efe7d9" stroke-opacity=".55" stroke-width="1">
+    <path d="M96 262 H256" />
+    <path d="M96 256 v12 M256 256 v12" />
+  </g>
+  <path d="M96 262 l9 -4 v8 z" fill="#efe7d9" fill-opacity=".55" />
+  <path d="M256 262 l-9 -4 v8 z" fill="#efe7d9" fill-opacity=".55" />
+  <text x="176" y="286" fill="#efe7d9" font-family="ui-monospace, monospace" font-size="13"
+        text-anchor="middle">40 cm</text>
+
+  <text x="70" y="358" fill="#a29683" font-family="ui-monospace, monospace" font-size="12">
+    moved clear of the door swing
+  </text>
+</svg>
