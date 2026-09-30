@@ -94,8 +94,16 @@ export const IntentSchema = z
       .regex(/^#[\da-f]{6}$/i)
       .optional(),
     material_ref: z.string().optional(),
-    yaw_degrees: z.number().finite().optional(),
-    yaw_delta_degrees: z.number().finite().optional(),
+    yaw_degrees: z
+      .number()
+      .finite()
+      .optional()
+      .describe('Absolute facing in degrees, for "face it at the window".'),
+    yaw_delta_degrees: z
+      .number()
+      .finite()
+      .optional()
+      .describe('Turn by this many degrees, for "turn it 90 degrees" or "turn it around" (180).'),
     dimensions: z
       .tuple([z.number().positive(), z.number().positive(), z.number().positive()])
       .optional(),
@@ -274,6 +282,42 @@ export const CATALOG_TEMPLATE: Record<string, 'bed' | 'table' | 'frame' | 'shelf
 
 function templateFor(category: string): 'bed' | 'table' | 'frame' | 'shelf' | 'cabinet' {
   return CATALOG_TEMPLATE[category] ?? 'cabinet';
+}
+
+/** The only catalog categories that hang on a wall. A `television` borrows the `frame`
+ * box and still stands on the floor, so the template cannot answer this. */
+const WALL_MOUNTED_CATEGORIES = new Set(['painting', 'mirror']);
+
+/**
+ * Makes a catalog object's collision box match the mesh it draws: one solid volume.
+ *
+ * The `table` and `bed` templates are a top slab on four thin legs. That is right for
+ * procedural furniture — it is what lets a chair tuck under a table — and wrong for a
+ * mesh, which is solid. A level ray at seat height passed between a sofa's legs, so
+ * pointing at one did not select it, and a coffee table could be committed inside it.
+ */
+function applyCatalogProxy(
+  built: ReturnType<typeof buildObject>,
+  category: string,
+  dimensions: Vec3,
+) {
+  const [w, h, d] = dimensions;
+  built.assembly.parts = [
+    {
+      id: 'bounds',
+      center: [0, h / 2, 0],
+      size: [w, h, d],
+      color: built.assembly.parts[0]?.color ?? DEFAULT_COLOR,
+      structural: true,
+    },
+  ];
+  const wall = WALL_MOUNTED_CATEGORIES.has(category);
+  built.assembly.mounting = wall ? 'wall' : 'floor';
+  built.assembly.support = {
+    ...built.assembly.support,
+    mode: wall ? 'wall' : 'floor',
+    mountHeight: wall ? built.assembly.support.mountHeight : null,
+  };
 }
 
 /** A label and nothing else: "make this a warm scandinavian living room". */
@@ -940,7 +984,11 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
         return propose(plan, context, id);
       }
       const floor = state.design.surfaces.find((s) => s.class === 'floor' && s.state === 'present');
-      const mounted = recipe.family === 'frame' || recipe.family === 'shelf';
+      // A catalog entry decides this from its own category; only the procedural
+      // families take it from the template.
+      const mounted = catalogued
+        ? WALL_MOUNTED_CATEGORIES.has(catalogued.category)
+        : recipe.family === 'frame' || recipe.family === 'shelf';
       const wall = state.design.surfaces.find(
         (s) => s.id === context.destination?.surfaceId && s.class === 'wall' && s.state === 'present',
       );
@@ -962,7 +1010,9 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
               n[0] * origin[0] + n[1] * origin[1] + n[2] * origin[2] - wall.plane.offset;
             position = [
               origin[0] + n[0] * (candidateDimensions[2] / 2 - distance) + Math.cos(yaw) * offset,
-              Math.max(0.2, origin[1] - candidateDimensions[1] / 2),
+              // Only something that mounts is lifted off the floor. A sofa pointed at a
+              // wall should stand against it, facing out, not float at the pointed height.
+              mounted ? Math.max(0.2, origin[1] - candidateDimensions[1] / 2) : 0,
               origin[2] + n[2] * (candidateDimensions[2] / 2 - distance) - Math.sin(yaw) * offset,
             ];
           }
@@ -973,7 +1023,13 @@ export function createEditor(scene: EditorState, modules: EditorModules = defaul
             wall?.id ?? floor.id,
           );
           built.object.pose.yaw = yaw;
-          if (catalogued) built.object.asset_ref = `catalog:${catalogued.id}`;
+          if (catalogued) {
+            built.object.asset_ref = `catalog:${catalogued.id}`;
+            // Otherwise the solver narrates a sofa as the template it borrowed: the
+            // refusal read "overlaps the bed".
+            built.object.refined_class = catalogued.category.replace(/_/g, ' ');
+            applyCatalogProxy(built, catalogued.category, candidateDimensions);
+          }
           additions.push({ type: 'add', ...built });
         }
         return additions;

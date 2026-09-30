@@ -13,6 +13,7 @@ import {
   evaluatePlacement,
   MAX_EVALUATIONS,
   planLayout,
+  raycast,
 } from '@reality/spatial-engine';
 import { buildObject } from '@reality/scene-recipes';
 import { SceneRecipeSchema, ShellSchema } from '@reality/contracts';
@@ -299,6 +300,173 @@ export const scenarios: Scenario[] = [
           plant ? plant.reason : 'was approximated, and should not have been',
         ),
       ];
+    },
+  },
+  {
+    id: 'rotate-fits',
+    title: 'Asking for a rotation rotates',
+    milestone: 'M7',
+    gate: 'placement',
+    scene: sampleRoom,
+    run: async (editor) => {
+      setObjectCatalog([
+        { id: 'three-seat-sofa', category: 'sofa', size: 'large', materialFamily: 'fabric',
+          sha256: 'a'.repeat(64), dimensionsM: { width: 2.3, height: 0.85, depth: 0.95 } },
+      ]);
+      const steps: StepResult[] = [];
+      const floor = editor.engine.getSnapshot().scene.design.surfaces.find((s) => s.class === 'floor')!;
+      await editor.intent(
+        { action: 'add', catalog_id: 'three-seat-sofa' },
+        context(editor, { position: [0, 0, -1.2], surfaceId: floor.id, kind: 'surface' }),
+        'rot-add',
+      );
+      const id = 'rot-add-0';
+      const yaw = () => {
+        const o = editor.engine.getSnapshot().scene.design.objects.find((x) => x.id === id);
+        return o ? Math.round((o.pose.yaw * 180) / Math.PI) : NaN;
+      };
+
+      // A 2.3m sofa turned across a 4m room crosses a wall. `batch` validated in place
+      // and refused; the solver slides it clear instead.
+      const across = await editor.intent(
+        { action: 'rotate', yaw_delta_degrees: 45 },
+        context(editor, null, id),
+        'rot-across',
+      );
+      steps.push(
+        check(
+          'a turn that no longer fits is solved, not refused',
+          across.status === 'adjusted' && yaw() === 45,
+          `${across.status} -> ${yaw()}deg (${describe(across)})`,
+        ),
+      );
+      steps.push(
+        check(
+          'and it says how far it had to move',
+          (across.report?.adjustment_distance_m ?? 0) > 0 && !!across.report?.adjustment_reason,
+          `${Math.round((across.report?.adjustment_distance_m ?? 0) * 100)}cm: ${across.report?.adjustment_reason ?? 'no reason'}`,
+        ),
+      );
+
+      const absolute = await editor.intent(
+        { action: 'rotate', yaw_degrees: 180 },
+        context(editor, null, id),
+        'rot-abs',
+      );
+      steps.push(
+        check('an absolute angle is taken as given', absolute.status === 'applied' && yaw() === 180, `${absolute.status} -> ${yaw()}deg`),
+      );
+
+      const relative = await editor.intent(
+        { action: 'rotate', yaw_delta_degrees: 90 },
+        context(editor, null, id),
+        'rot-rel',
+      );
+      steps.push(
+        check('a relative turn adds to where it already pointed', relative.status === 'applied' && yaw() === 270, `${relative.status} -> ${yaw()}deg`),
+      );
+
+      const undone = await editor.intent({ action: 'undo' }, context(editor, null), 'rot-undo');
+      steps.push(check('one turn is one undo', undone.status === 'applied' && yaw() === 180, `${undone.status} -> ${yaw()}deg`));
+
+      const vague = await editor.intent({ action: 'rotate' }, context(editor, null, id), 'rot-vague');
+      steps.push(
+        check('a turn with no angle asks rather than guesses', vague.status === 'rejected', describe(vague)),
+      );
+
+      setObjectCatalog([]);
+      return steps;
+    },
+  },
+  {
+    id: 'catalog-proxy',
+    title: 'A catalog object is solid, selectable, and stands where it belongs',
+    milestone: 'M7',
+    gate: 'placement',
+    scene: sampleRoom,
+    run: async (editor) => {
+      setObjectCatalog([
+        { id: 'three-seat-sofa', category: 'sofa', size: 'large', materialFamily: 'fabric',
+          sha256: 'a'.repeat(64), dimensionsM: { width: 2.3, height: 0.85, depth: 0.95 } },
+        { id: 'tall-shelving-unit', category: 'shelving_unit', size: 'large', materialFamily: 'wood',
+          sha256: 'b'.repeat(64), dimensionsM: { width: 1.2, height: 1.8, depth: 0.35 } },
+        { id: 'framed-painting', category: 'painting', size: 'medium', materialFamily: 'wood',
+          sha256: 'c'.repeat(64), dimensionsM: { width: 0.6, height: 0.8, depth: 0.04 } },
+      ]);
+      const steps: StepResult[] = [];
+
+      const sofa = await editor.intent(
+        { action: 'add', catalog_id: 'three-seat-sofa' },
+        context(editor, onFloor(editor, [0, 0, -1.2])),
+        'proxy-sofa',
+      );
+      steps.push(check('a catalog sofa stands on the floor', sofa.status === 'applied', describe(sofa)));
+
+      const scene = editor.engine.getSnapshot().scene;
+      const assembly = scene.assemblies['proxy-sofa-0'];
+      steps.push(
+        check(
+          'its collision box is one solid volume, not a slab on legs',
+          assembly?.parts.length === 1 && assembly.parts[0]?.id === 'bounds',
+          `${assembly?.parts.length ?? 0} parts`,
+        ),
+      );
+
+      // Hands and the SCP crosshair both point. A slab-on-legs proxy let a level ray
+      // pass between the legs, so touch could select what pointing could not.
+      let hits = 0;
+      for (let ix = 0; ix < 8; ix++)
+        for (let iy = 0; iy < 8; iy++) {
+          const x = -1.15 + ((ix + 0.5) / 8) * 2.3;
+          const y = ((iy + 0.5) / 8) * 0.85;
+          if (raycast(scene, { origin: [x, y, 1.5], direction: [0, 0, -1] })?.objectId === 'proxy-sofa-0')
+            hits++;
+        }
+      steps.push(
+        check(
+          'pointing anywhere at it selects it',
+          hits === 64,
+          `${Math.round((hits / 64) * 100)}% of the silhouette selects`,
+        ),
+      );
+
+      const inside = await editor.intent(
+        { action: 'add', family: 'table', dimensions: [1, 0.42, 0.55] },
+        context(editor, onFloor(editor, [0, 0, -1.2])),
+        'proxy-coffee',
+      );
+      steps.push(
+        check('a low table cannot be committed inside it', inside.status === 'rejected', describe(inside)),
+      );
+
+      const shelf = await editor.intent(
+        { action: 'add', catalog_id: 'tall-shelving-unit' },
+        context(editor, onFloor(editor, [-1.3, 0, 1.0])),
+        'proxy-shelf',
+      );
+      steps.push(
+        check(
+          'a freestanding bookshelf is not forced onto a wall',
+          shelf.status === 'applied',
+          describe(shelf),
+        ),
+      );
+
+      const painting = await editor.intent(
+        { action: 'add', catalog_id: 'framed-painting' },
+        context(editor, onFloor(editor, [0, 0, 0])),
+        'proxy-painting',
+      );
+      steps.push(
+        check(
+          'something that really does hang still asks for a wall',
+          painting.status === 'rejected',
+          describe(painting),
+        ),
+      );
+
+      setObjectCatalog([]);
+      return steps;
     },
   },
   {

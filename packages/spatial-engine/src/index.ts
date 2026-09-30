@@ -88,9 +88,18 @@ function templateOf(scene: EditorState, object: ObjectLike): string {
   return scene.assemblies[object.id]?.template ?? object.class;
 }
 
+/** Wall mounting is a property of the assembly, not of the template that shaped its box.
+ * A catalog object may borrow the `shelf` box and still stand on the floor. Falls back to
+ * the template only for a scanned object, which has no assembly. */
+function mountsToWall(scene: EditorState, object: ObjectLike): boolean {
+  const support = scene.assemblies[object.id]?.support;
+  if (support) return support.mode === 'wall';
+  return WALL_TEMPLATES.has(templateOf(scene, object));
+}
+
 /** A lamp may sit on a table. A bed may not. */
 function mayRestOnObject(scene: EditorState, object: ObjectLike): boolean {
-  if (WALL_TEMPLATES.has(templateOf(scene, object))) return false;
+  if (mountsToWall(scene, object)) return false;
   const w = object.dimensions[0] ?? 0;
   const h = object.dimensions[1] ?? 0;
   const d = object.dimensions[2] ?? 0;
@@ -563,7 +572,7 @@ export class SpatialEngine {
     supportId: string,
   ): { mode: 'floor' | 'wall' | 'object'; surfaceId: string } | { refusal: EditRefusal; message: string } {
     const surface = scene.design.surfaces.find((s) => s.id === supportId && s.state === 'present');
-    const wantsWall = WALL_TEMPLATES.has(templateOf(scene, object));
+    const wantsWall = mountsToWall(scene, object);
     if (surface) {
       if (surface.class === 'wall')
         return wantsWall
@@ -870,8 +879,75 @@ export class SpatialEngine {
       this.preview({ position: command.position, yaw: this.snapshot.preview!.pose.yaw });
       return this.release(operationId, command.supportSurface);
     }
+    if (command.type === 'rotate') return this.turn(command, operationId);
     if (command.type === 'structure') return this.structure(command, operationId);
     return this.batch([command], operationId, revision);
+  }
+
+  /**
+   * Turns an object, sliding it clear when the new angle no longer fits.
+   *
+   * `batch` validates in place, so a 90 degree turn was refused for crossing a wall.
+   * The nudge search holds yaw and moves position, which is the freedom a rotation
+   * leaves open: the caller named an angle, not a place. A move names the place, so
+   * that one still asks before it relocates anything.
+   */
+  private turn(
+    command: Extract<EditCommand, { type: 'rotate' }>,
+    operationId: string,
+  ): EditResult {
+    const original = this.snapshot.scene;
+    const object = original.design.objects.find(
+      (o) => o.id === command.targetId && o.state === 'present',
+    );
+    if (!object)
+      return this.result('rejected', 'I cannot find that object in the room.', {
+        refusal: 'unknown_target',
+      });
+    if (!object.movable)
+      return this.result(
+        'rejected',
+        `The ${object.refined_class ?? object.class} is built in and cannot turn.`,
+        { refusal: 'immovable' },
+      );
+
+    const candidate = copy(original) as EditorState;
+    const target = candidate.design.objects.find((o) => o.id === command.targetId)!;
+    const support = candidate.assemblies[target.id]?.support;
+    // Yaw on a wall mount is the wall's, not the object's. Turning it would take it off.
+    if (support?.mode === 'wall')
+      return this.result(
+        'rejected',
+        `The ${object.refined_class ?? object.class} hangs on a wall and faces the way that wall faces.`,
+        { refusal: 'incompatible_support' },
+      );
+
+    target.pose.yaw = command.yaw;
+    const report = solvePlacement(
+      candidate,
+      target.id,
+      { position: [...target.pose.position] as Vec3, yaw: command.yaw },
+      buildIndex(candidate, target.id),
+      { supportId: support?.mode === 'object' ? support.surfaceId : undefined },
+    );
+    if (report.status === 'rejected')
+      return this.result(
+        'rejected',
+        `I cannot turn it that way: ${report.adjustment_reason ?? 'it does not fit'}.`,
+        { report },
+      );
+
+    const applied = report.applied_pose!;
+    target.pose = { position: [...applied.position] as Vec3, yaw: applied.yaw };
+    const operation = this.makeOp(command, operationId, this.inverseOf(original, command));
+    this.commit(candidate, original, { ...operation, report });
+    return this.result(
+      report.status === 'adjusted' ? 'adjusted' : 'applied',
+      report.status === 'adjusted'
+        ? `Turned it, and moved it ${Math.round(report.adjustment_distance_m * 100)}cm because ${report.adjustment_reason}.`
+        : 'Turned it.',
+      { report },
+    );
   }
 
   private undo(operationId: string): EditResult {
