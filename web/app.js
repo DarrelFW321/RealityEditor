@@ -414,8 +414,8 @@ function generate(noun) {
   const id = `o${nextId++}`;
   const it = room.add(id, recipe, res.x, res.y, { ghost: true });
   updateCount();
-  const li = say('dex', `Nothing in the catalog matches “${escapeHtml(noun)}”, so I’m <b>generating it</b>. Geometry first, materials next.`, {
-    report: `op    generate("${noun}")\ncatalog  no match\ntext→3D  ~90s  (sped up for the demo)`,
+  const li = say('dex', `Nothing in the catalog matches “${escapeHtml(noun)}”. On a phone this is where one gets built, in about ninety seconds. <b>Here it is a stand-in shape.</b>`, {
+    report: `op    generate("${noun}")\ncatalog    no match\non device  text→3D, ~90s\nhere       placeholder box`,
   });
   status.textContent = 'Generating…';
   setTimeout(() => {
